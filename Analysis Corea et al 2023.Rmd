@@ -1,0 +1,2641 @@
+ins---
+title: "Milk Analysis"
+author: "Gustavo Reyes"
+date: "10/25/2021"
+output: html_document
+---
+#Milk Analysis: 
+
+```{r}
+#Setting Working Directory-------------------------------------
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path)) #Set working directory to the path of document
+```
+
+## Loading Libraries
+```{r ,echo=FALSE}
+#Opening Libary and Inputs-------------------------------------
+source("Util_Library.R")
+source("Functions_Full_Analysis.R")
+```
+
+## Loading Model Necessary Inputs. 
+```{r, include=FALSE}
+library(tidyverse)
+#Inputs and Source Files-------------------------------------
+
+#Inputs
+source("Main_Loop.R")
+source("Input_Static.R")
+source("Input_Functions.R")
+source("Util_DFFunctions.R")
+source("Util_DFWeekCreation.R")
+source("Util_Counter&Lists.R")
+#Functions
+source("Util_Functions.R")
+source("Util_CCFunctions2.R")
+source("Util_VisualFunctions.R")
+source("Util_Output_Functions.R")
+
+```
+
+## Functions for growth and lag phases 
+```{r}
+#Function for growth and lag phase
+new_growth_rate<-function(newTemp, oldMu,oldTemp = 6, T0 = -4.15){
+  newMu<-((newTemp-T0)/(oldTemp-T0))* oldMu
+  return (newMu)
+}
+
+#Calculation of the new lag time.
+new_lag_time <- function (newTemp, oldLag, oldTemp = 6, T0 = -4.15) {
+  numerator <- oldTemp -T0
+  denom <- newTemp - T0
+  newLag <- ( (numerator / denom)^2) * oldLag
+  return(newLag)
+}
+```
+
+#functions to Create a random time temp df linear. 
+```{r}
+#Not in use, function to create a data frame based on interval and initial and final temperature
+Time_Temp_Creation<-function(Total_Time, Interval, Initial_Temperature, Final_Temperature){
+  Time_Temp_df<-data.frame("min"= seq(0,Total_Time,by = Interval),
+                         "tempM"  = seq(Initial_Temperature,Final_Temperature, by = ((Final_Temperature - Initial_Temperature)/(length(seq(0,Total_Time,by = Interval)) - 1) )))
+}
+
+Time_Temp_Creation_Var<-function(Total_Time, Interval, Mean_Temperature, SD_Temperature){
+  Time_Temp_df<-data.frame("min"= seq(0,Total_Time,by = Interval),
+                         "tempM"= rnorm(n =Total_Time+1, mean = Mean_Temperature, sd= SD_Temperature))
+  return (Time_Temp_df)
+}
+```
+
+#Function for lag models and buchanan
+```{r}
+#This function calculates thee growth based on a time and temperature profile for 1 specific milk with R100084 P Paoae
+Func_Growth_LagCon<-function(In_Lag_Consumed, Time_Temp_df,Interval, AF){
+  #In_Lag_Consumed= Total lag time consumed
+  #Time_Temp_df = dataframe with time and temperature conditions
+  #Interval = time interval in the time_temp_df in hrs. 
+  Total_Lag_Consumed = In_Lag_Consumed
+  Total_Growth = 0
+  old_lag = 0
+  NMax = 8.14
+  old_mumax = 0.083508
+  Growth_V = c()
+  for (i in 1:nrow(Time_Temp_df)){
+    if (Total_Lag_Consumed <1 && old_lag!=0){
+      Lag_t_interval<-new_lag_time(newTemp = Time_Temp_df$MilkTemp[i], oldLag = old_lag)
+      Lag_Consumed<-Interval/Lag_t_interval
+      Total_Lag_Consumed<-Total_Lag_Consumed+Lag_Consumed
+      Growth = 0
+    } else if (Total_Lag_Consumed>=1 | old_lag == 0){
+      Growth = ((new_growth_rate(newTemp = Time_Temp_df$MilkTemp[i], oldMu = old_mumax))/2.303)* AF#0.684 #Converted log10 from log ln
+      Total_Growth = Total_Growth + (Growth*Interval)
+    }
+    Growth_V = c(Growth_V,Total_Growth)
+    #print(length(Growth_V))
+  }
+  return(list(Total_Growth,Total_Lag_Consumed,Growth_V))
+}
+
+#Buchanan spoilage function
+Spoilage_Function_Single_Milk<-function(Cont, Pop_Max, Time_Temp_df, Interval =1/60, AF){
+  Lag_Consumed = 0
+  #this function provides two outputs, the total growth, and the new updated lag phase consumed. 
+  Output_Milk<-Func_Growth_LagCon(In_Lag_Consumed = Lag_Consumed ,Time_Temp_df = Time_Temp_df,Interval = Interval, AF=AF)
+  Lag_Consumed = Output_Milk[[2]]
+  Cont<-Output_Milk[[1]]+Cont
+  if( Cont>Pop_Max){
+     Cont = Pop_Max
+  }
+  return (list(Cont,Output_Milk[[3]]))
+}
+```
+
+#Function to apply growth 
+```{r}
+#Applying Changes over time with N max limit
+Appling_Changes<-function(df,Changes_Over_Time){
+  NMax = 8.14
+  Contamination_v<-df$InSpoilageCon
+  Time_V<-df$TotTime
+  Final_contamination_v<-c()
+  for (i in 1:nrow(df)){
+    In_Cont<-Contamination_v[i]
+    Time<-Time_V[i]
+    if (Time == 0){
+      Total_Growth = 0
+    }else{
+      Total_Growth<-Changes_Over_Time[Time]
+    }
+    Final_Con<-In_Cont+Total_Growth
+    if(Final_Con>NMax){
+      Final_Con <- NMax
+    }
+    Final_contamination_v<-c(Final_contamination_v,Final_Con)
+  }
+  df$SpoilageCon<-Final_contamination_v
+  return(df)
+}
+```
+
+
+#Importing time and Temp Profiles. 
+```{r}
+#Before Running this make sure that the files from "Time and Temperature Profiles.rmd" have been generated accordingly
+
+## Primary Scenarios
+
+#Room Temp B
+Df_RT_MT_RTB<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_RTB.csv") 
+#Refrigerated Tray
+Df_RT_MT_RT<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_RT.csv") 
+#Tray With Ice Packs
+Df_RT_MT_TIP<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_TIP.csv") 
+#Tray with Ice 
+Df_RT_MT_TIC<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_TIC.csv") 
+#Cooler with Ice
+Df_RT_MT_CI<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_CI.csv")
+#room temp b with ref break
+Df_RT_MT_RTB_refB<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_RTB_refB.csv")
+
+## Temperature Scenarios
+#Room Temp B
+Df_RT_MT_RTB_18C<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_RTB_18C.csv") 
+#Refrigerated Tray
+Df_RT_MT_RTB_21C<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_RTB_21C.csv") 
+#Tray With Ice Packs
+Df_RT_MT_RTB_23C<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_RTB_23C.csv") 
+
+## Updated Refrigeration Temps
+Df_RT_MT_Ref_7C<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_Ref_7C.csv") 
+Df_RT_MT_Ref_2C<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_Ref_2C.csv")
+Df_RT_MT_Ref_4C<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_Ref_4C.csv")
+
+
+#Bell Schedule Scenarios
+Df_RT_MT_s5b4<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s5b4.csv")
+Df_RT_MT_s4b3<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s4b3.csv")
+Df_RT_MT_s1b0<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s1b0.csv")
+Df_RT_MT_s2b1<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s2b1.csv")
+Df_RT_MT_s3b2<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s3b2.csv")
+Df_RT_MT_s4b3TIC<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s4b3TIC.csv")
+Df_RT_MT_s4b3TIP<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s4b3TIP.csv")
+Df_RT_MT_s5b4TIC<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s5b4TIC.csv")
+Df_RT_MT_s5b4TIP<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s5b4TIP.csv")
+```
+
+
+## Summary Statistics creating three summary functions. 
+```{r}
+#Total Time
+
+summary_Times<-function(df){
+  a<-df %>% 
+    #filter(Shared == "No") %>% 
+    group_by(Shared) %>% 
+    dplyr::summarize(All_time=median(TotTime), Alltime_q25 = quantile(TotTime, 0.025), Alltime_q975 = quantile(TotTime, 0.975))
+
+  b<-df %>% 
+    #filter(Shared == "No") %>% 
+    group_by(NULL) %>% 
+    dplyr::summarize(All_time=median(TotTime), Alltime_q25 = quantile(TotTime, 0.025), Alltime_q975 = quantile(TotTime, 0.975)) %>% 
+  mutate(Shared = "All") %>% 
+    select(Shared,All_time,Alltime_q25,Alltime_q975)
+  
+  return(rbind(a,b))
+}
+
+
+
+summary_location_per<-function(df){
+  a<-df %>% 
+  group_by(Location) %>% 
+  dplyr::summarize(count = n(),
+                   Day_1 = sum(TotTime<1440)/count,
+                   Day_2 = sum(TotTime>1440 & TotTime<1440*2)/count,
+                   Day_3 = sum(TotTime>1440*2 & TotTime<1440*3)/count,
+                   Day_4 = sum(TotTime>1440*3 & TotTime<1440*4)/count,
+                   Day_5 = sum(TotTime>1440*4 & TotTime<1440*5)/count
+                   )
+  return (a)
+}
+
+
+summary_per_spoiled<-function(df){
+  #Spoiled Milks
+  a<-df %>% 
+    #filter(Shared == "Yes") %>%
+    group_by(Shared) %>%
+    dplyr::summarize(All_Total_Spoiled = sum(SpoilageCon>6), percentage = (sum(SpoilageCon>6)/n())) 
+  
+  b<-df %>% 
+    #filter(Shared == "Yes") %>%
+    group_by(NULL) %>%
+    dplyr::summarize(All_Total_Spoiled = sum(SpoilageCon>6), percentage = (sum(SpoilageCon>6)/n())) %>% 
+    mutate(Shared = "All") %>% 
+    select(Shared,All_Total_Spoiled,percentage)
+  return(rbind(a,b))
+}
+
+
+
+summary_pop_change<-function(df){
+  #Population Change
+#Population Change
+a<-df %>% 
+  #filter(Shared == "Yes") %>% 
+  group_by(Shared) %>%
+  dplyr::summarize(PopC_All_Med = median(SpoilageCon - InSpoilageCon), PopC_All_q25 = quantile(SpoilageCon - InSpoilageCon, 0.025), PopC_All_q975 = quantile(SpoilageCon - InSpoilageCon, 0.975)) 
+
+
+b<-df %>% 
+  #filter(Shared == "Yes") %>% 
+  group_by(NULL) %>%
+  dplyr::summarize(PopC_All_Med = median(SpoilageCon - InSpoilageCon), PopC_All_q25 = quantile(SpoilageCon - InSpoilageCon, 0.025), PopC_All_q975 = quantile(SpoilageCon - InSpoilageCon, 0.975)) %>% 
+  mutate(Shared = "All") %>% 
+  select(Shared,PopC_All_Med,PopC_All_q25,PopC_All_q975)
+  return(rbind(a,b))
+}
+
+```
+
+
+##Running the  Model for Milk.
+
+If conditions are changed, need to change in the input_static, Service Outputs, Days Outputs files.
+
+- To change the number of weeks: Input_Static : Sens_Iterations
+- To change the number of Days, Services: Input_Static : Days_No, Service_No
+- To Change the Service Time: Input Static: Time_Service_Length
+- To change the In between Input Static: Time_Turnaround_Length
+- To Change the Overnight Storage time: Input Static: Time_Overnight_Length
+- To Change the contamination levels: Input Static: Milk_Con_Mean, and Milk_Con_SD
+
+The simulation  below will generate all the milks throughout the 1,000 weeks. Then we will apply the different conditions to  the milks to compare. 
+
+```{r warning=TRUE}
+#This chunk Runs the ST Model 
+
+#Temp_Profile<-Df_RT_MT_RTB
+
+Obtaining_Spoiled_Milks<-function(Temp_Profile, N_Years, Service_Length,TurningT_Length){
+  final_list <- list()
+  Outputs_List_TotalMilks<-list()
+  #Outputs_List_location_per<-list()
+  Outputs_List_per_spoiled<-list()
+  Outputs_List_pop_change<-list()
+  
+  #Define the length of periods to match your model to properly adjust time. 
+  Service_Length = Service_Length#50
+  TurningT_Length = TurningT_Length#25
+  
+  for (i in 1:N_Years){
+    start_time<-Sys.time()
+    source("Main_Loops2.R")
+    
+    #1. Start from here
+    Individual_Analysis_Milk<-rbind.fill(List_Sens_Pre)
+    
+    #2. find the duplicates
+    
+    #this step filters replicated based on the ID
+    Individual_Analysis_Milk<-Individual_Analysis_Milk %>% 
+      group_by(ID) %>% 
+      filter(TotServices==max(TotServices))
+    #3
+    AnalysysDF<-Individual_Analysis_Milk
+    
+    #Adding the time of the services for those milks that were added to the service line during the lunch period.
+    AnalysysDF[AnalysysDF$Initial.Service>1,]
+    AnalysysDF$TotTime<-AnalysysDF$TotTime+(as.integer(AnalysysDF$Initial.Service)-1)*(Service_Length+TurningT_Length)
+    
+    AnalysysDF$Shared<-ifelse(AnalysysDF$STtimes>0, "Yes", "No")
+    
+    
+    Output_Milk<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Temp_Profile, Interval =1/60,AF = 1.32)
+    Changes_Over_Time<-Output_Milk[[2]]
+    
+    #If data frame is large this make time ~20 mins
+    AnalysysDF<- Appling_Changes(df = AnalysysDF,
+                                     Changes_Over_Time = Changes_Over_Time)
+    
+    Outputs_List_TotalMilks<-append(Outputs_List_TotalMilks,nrow(AnalysysDF))
+    #Outputs_List_location_per<-append(Outputs_List_location_per,list(summary_location_per(AnalysysDF)))
+    Outputs_List_per_spoiled<-append(Outputs_List_per_spoiled,list(summary_per_spoiled(AnalysysDF)))
+    Outputs_List_pop_change<-append(Outputs_List_pop_change,list(summary_pop_change(AnalysysDF)))
+    
+    end_time<-Sys.time()
+  
+    Total_time<-end_time-start_time
+    print(Total_time)
+  }
+  return(list( Outputs_List_TotalMilks,Outputs_List_per_spoiled,Outputs_List_pop_change))
+}
+
+```
+
+
+
+```{r warning=TRUE}
+#This chunk Runs the ST Model 
+
+#Temp_Profile<-Df_RT_MT_RTB
+
+Obtaining_Spoiled_Milks_DFs<-function(N_Years, Service_Length,TurningT_Length){
+  final_list <- list()
+  #Define the length of periods to match your model to properly adjust time. 
+  Service_Length = Service_Length#50
+  TurningT_Length = TurningT_Length#25
+  
+  for (i in 1:N_Years){
+    print(i)
+    start_time<-Sys.time()
+    source("Main_Loops2.R")
+    
+    #1. Start from here
+    Individual_Analysis_Milk<-rbind.fill(List_Sens_Pre)
+    
+    #2. find the duplicates
+    
+    #this step filters replicated based on the ID
+    Individual_Analysis_Milk<-Individual_Analysis_Milk %>% 
+      group_by(ID) %>% 
+      filter(TotServices==max(TotServices))
+    #3
+    AnalysysDF<-Individual_Analysis_Milk
+    
+    #Adding the time of the services for those milks that were added to the service line during the lunch period.
+    AnalysysDF[AnalysysDF$Initial.Service>1,]
+    AnalysysDF$TotTime<-AnalysysDF$TotTime+(as.integer(AnalysysDF$Initial.Service)-1)*(Service_Length+TurningT_Length)
+    
+    AnalysysDF$Shared<-ifelse(AnalysysDF$STtimes>0, "Yes", "No")
+    
+    final_list<-append(final_list,list(AnalysysDF))
+    end_time<-Sys.time()
+  
+    Total_time<-end_time-start_time
+    print(Total_time)
+  }
+  return(final_list)
+}
+
+```
+
+
+### When running up to this point
+```{r warning=TRUE}
+
+#normal service, changes in time and temp profile #this runs the model
+Outs_DFs<-Obtaining_Spoiled_Milks_DFs(N_Years = 50, Service_Length = 50,TurningT_Length = 25) 
+
+Outs_DFs_RTB<-Outs_DFs
+Outs_DFs_RT<-Outs_DFs
+Outs_DFs_TIP<-Outs_DFs
+Outs_DFs_TIC<-Outs_DFs
+Outs_DFs_CI<-Outs_DFs
+Outs_DFs_RTB_refB<-Outs_DFs
+Outs_DFs_RTB_18C<-Outs_DFs
+Outs_DFs_RTB_21C<-Outs_DFs
+Outs_DFs_RTB_23C<-Outs_DFs
+Outs_DFs_Ref_7C<-Outs_DFs
+Outs_DFs_Ref_2C<-Outs_DFs
+Outs_DFs_Ref_4C<-Outs_DFs
+```
+
+```{r warning=TRUE}
+#for this one you will have to change the Input_static file, reload it and then run each of the lines
+source("Input_Static.R")
+Outs_DFs_LowCont<-Obtaining_Spoiled_Milks_DFs(N_Years = 50, Service_Length = 50,TurningT_Length = 25)
+
+source("Input_Static.R")
+Outs_DFs_MedCont<-Obtaining_Spoiled_Milks_DFs(N_Years = 50, Service_Length = 50,TurningT_Length = 25)
+
+source("Input_Static.R")
+Outs_DFs_HighCont<-Obtaining_Spoiled_Milks_DFs(N_Years = 50, Service_Length = 50,TurningT_Length = 25)
+
+source("Input_Static.R")
+Outs_DFs_VeryHighCont<-Obtaining_Spoiled_Milks_DFs(N_Years = 50, Service_Length = 50,TurningT_Length = 25) 
+```
+
+
+```{r warning=TRUE}
+#ST off
+source("Input_Static.R")
+Outs_DFs_SToff<-Obtaining_Spoiled_Milks_DFs(N_Years = 50, Service_Length = 50,TurningT_Length = 25)
+
+#Difference Services
+source("Input_Static.R")
+Outs_DFs_5s4b<-Obtaining_Spoiled_Milks_DFs(N_Years = 50, Service_Length = 50,TurningT_Length = 4)
+
+source("Input_Static.R")
+Outs_DFs_4s3b<-Obtaining_Spoiled_Milks_DFs(N_Years = 50, Service_Length = 50,TurningT_Length = 7)
+
+source("Input_Static.R")
+Outs_DFs_1sb0<-Obtaining_Spoiled_Milks_DFs(N_Years = 50, Service_Length = 40,TurningT_Length = 0)
+
+source("Input_Static.R")
+Outs_DFs_2sb1<-Obtaining_Spoiled_Milks_DFs(N_Years = 50, Service_Length = 30,TurningT_Length = 14)
+
+source("Input_Static.R")
+Outs_DFs_3sb2<-Obtaining_Spoiled_Milks_DFs(N_Years = 50, Service_Length = 31,TurningT_Length = 16)
+
+#Longer Bell Schedules Plus Storage Systems 
+
+source("Input_Static.R")
+Outs_DFs_4sb3TIC<-Obtaining_Spoiled_Milks_DFs(N_Years = 50, Service_Length = 50,TurningT_Length = 7)
+
+source("Input_Static.R")
+Outs_DFs_4sb3TIP<-Obtaining_Spoiled_Milks_DFs(N_Years = 50, Service_Length = 50,TurningT_Length = 7)
+
+```
+
+
+```{r}
+Extracting_Total_SpoiledMilks<-function(Output_Name, N_Years){
+  Total_Milks<-c()
+  for( i in 1:N_Years){
+    Total_Milks[i]<-Output_Name[[i]][[3,2]]
+  }
+  return(Total_Milks)
+}
+
+Extracting_Total_SpoiledMilks_SToff<-function(Output_Name, N_Years){
+  Total_Milks<-c()
+  for( i in 1:N_Years){
+    Total_Milks[i]<-Output_Name[[i]][[2,2]]
+  }
+  return(Total_Milks)
+}
+
+```
+
+
+#RTB
+```{r}
+RTB_List<-list()  
+Output_Milk_RTB<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_RTB, Interval =1/60,AF = 1.32)
+Changes_Over_Time_RTB<-Output_Milk_RTB[[2]]
+for (i in 1:50){
+  AnalysysDF_RTB<- Appling_Changes(df = Outs_DFs_RTB[[i]], Changes_Over_Time = Changes_Over_Time_RTB)
+  RTB_List<-append(RTB_List,list(AnalysysDF_RTB))
+}
+
+RTB_List[[i]]
+
+#Spoiled milks
+RTB_List_per_spoiled<-list() 
+for (i in 1:50){
+  RTB_List_per_spoiled<-append(RTB_List_per_spoiled,list(summary_per_spoiled(RTB_List[[i]])))
+}
+
+Total_Milks_Spoiled_RTB<-Extracting_Total_SpoiledMilks(Output_Name = RTB_List_per_spoiled, N_Years = 50)
+
+rows_RTB = c()
+for (i in 1:50){
+  x_RTB = nrow(RTB_List[[i]])
+  rows_RTB = c(rows_RTB,x_RTB)
+}
+####---------------------
+mean(rows_RTB)
+Total_Milks_Spoiled_RTB
+mean(Total_Milks_Spoiled_RTB)
+range (Total_Milks_Spoiled_RTB)
+
+
+#Range of milks per year
+RTB_List_total_milks<-c()
+for (i in 1:50){
+  RTB_List_total_milks<-c(RTB_List_total_milks,length(RTB_List[[i]]$ID))
+}
+#######-----------
+mean(RTB_List_total_milks)
+range(RTB_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+RTB_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  RTB_List_pecentage_spoiled<-c(RTB_List_pecentage_spoiled,(sum(RTB_List[[i]]$SpoilageCon>6)/length(RTB_List[[i]]$SpoilageCon)))
+}
+
+##
+mean(RTB_List_pecentage_spoiled)
+range (RTB_List_pecentage_spoiled)
+
+#Population Summary
+RTB_List_population<-c()
+for (i in 1:50){
+  RTB_List_population<-c(RTB_List_population,RTB_List[[i]]$SpoilageCon)
+}
+
+#####
+mean(RTB_List_population) #CFU/mL
+range (RTB_List_population)
+
+#Time in System
+RTB_List_Time<-c()
+for (i in 1:50){
+  RTB_List_Time<-c(RTB_List_Time,RTB_List[[i]]$TotTime)
+}
+
+mean(RTB_List_Time) #CFU/mL
+range (RTB_List_Time)
+quantile(RTB_List_Time, probs=c(10, 20, 30, 40, 50, 60, 70, 80, 85, 88, 89, 90, 95)/100)
+
+```
+
+#RTR
+```{r}
+RT_List<-list()  
+Output_Milk_RT<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_RT, Interval =1/60,AF = 1.32)
+Changes_Over_Time_RT<-Output_Milk_RT[[2]]
+for (i in 1:50){
+  AnalysysDF_RT<- Appling_Changes(df = Outs_DFs_RT[[i]], Changes_Over_Time = Changes_Over_Time_RT)
+  RT_List<-append(RT_List,list(AnalysysDF_RT))
+}
+
+RT_List[[i]]
+
+RT_List_per_spoiled<-list() 
+for (i in 1:50){
+  RT_List_per_spoiled<-append(RT_List_per_spoiled,list(summary_per_spoiled(RT_List[[i]])))
+}
+
+Total_Milks_Spoiled_RT<-Extracting_Total_SpoiledMilks(Output_Name = RT_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_RT
+mean(Total_Milks_Spoiled_RT)
+range (Total_Milks_Spoiled_RT)
+
+
+#Range of milks per year
+RT_List_total_milks<-c()
+for (i in 1:50){
+  RT_List_total_milks<-c(RT_List_total_milks,length(RT_List[[i]]$ID))
+}
+mean(RT_List_total_milks)
+range(RT_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+RT_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  RT_List_pecentage_spoiled<-c(RT_List_pecentage_spoiled,(sum(RT_List[[i]]$SpoilageCon>6)/length(RT_List[[i]]$SpoilageCon)))
+}
+
+mean(RT_List_pecentage_spoiled)
+range (RT_List_pecentage_spoiled)
+
+#Population Summary
+RT_List_population<-c()
+for (i in 1:50){
+  RT_List_population<-c(RT_List_population,RT_List[[i]]$SpoilageCon)
+}
+
+mean(RT_List_population) #CFU/mL
+range (RT_List_population)
+
+
+
+
+```
+
+
+#TIP
+```{r}
+TIP_List<-list()  
+Output_Milk_TIP<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_TIP, Interval =1/60,AF = 1.32)
+Changes_Over_Time_TIP<-Output_Milk_TIP[[2]]
+for (i in 1:50){
+  AnalysysDF_TIP<- Appling_Changes(df = Outs_DFs_TIP[[i]], Changes_Over_Time = Changes_Over_Time_TIP)
+  TIP_List<-append(TIP_List,list(AnalysysDF_TIP))
+}
+
+TIP_List[[i]]
+
+TIP_List_per_spoiled<-list() 
+for (i in 1:50){
+  TIP_List_per_spoiled<-append(TIP_List_per_spoiled,list(summary_per_spoiled(TIP_List[[i]])))
+}
+
+Total_Milks_Spoiled_TIP<-Extracting_Total_SpoiledMilks(Output_Name = TIP_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_TIP
+mean(Total_Milks_Spoiled_TIP)
+range (Total_Milks_Spoiled_TIP)
+
+#Range of milks per year
+TIP_List_total_milks<-c()
+for (i in 1:50){
+  TIP_List_total_milks<-c(TIP_List_total_milks,length(TIP_List[[i]]$ID))
+}
+mean(TIP_List_total_milks)
+range(TIP_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+TIP_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  TIP_List_pecentage_spoiled<-c(TIP_List_pecentage_spoiled,(sum(TIP_List[[i]]$SpoilageCon>6)/length(TIP_List[[i]]$SpoilageCon)))
+}
+
+mean(TIP_List_pecentage_spoiled)
+range (TIP_List_pecentage_spoiled)
+
+#Population Summary
+TIP_List_population<-c()
+for (i in 1:50){
+  TIP_List_population<-c(TIP_List_population,TIP_List[[i]]$SpoilageCon)
+}
+
+mean(TIP_List_population) #CFU/mL
+range (TIP_List_population)
+
+
+```
+
+
+
+#TIC
+```{r}
+TIC_List<-list()  
+Output_Milk_TIC<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_TIC, Interval =1/60,AF = 1.32)
+Changes_Over_Time_TIC<-Output_Milk_TIC[[2]]
+for (i in 1:50){
+  AnalysysDF_TIC<- Appling_Changes(df = Outs_DFs_TIC[[i]], Changes_Over_Time = Changes_Over_Time_TIC)
+  TIC_List<-append(TIC_List,list(AnalysysDF_TIC))
+}
+
+TIC_List[[i]]
+
+TIC_List_per_spoiled<-list() 
+for (i in 1:50){
+  TIC_List_per_spoiled<-append(TIC_List_per_spoiled,list(summary_per_spoiled(TIC_List[[i]])))
+}
+
+Total_Milks_Spoiled_TIC<-Extracting_Total_SpoiledMilks(Output_Name = TIC_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_TIC
+mean(Total_Milks_Spoiled_TIC)
+range (Total_Milks_Spoiled_TIC)
+
+#Range of milks per year
+TIC_List_total_milks<-c()
+for (i in 1:50){
+  TIC_List_total_milks<-c(TIC_List_total_milks,length(TIC_List[[i]]$ID))
+}
+mean(TIC_List_total_milks)
+range(TIC_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+TIC_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  TIC_List_pecentage_spoiled<-c(TIC_List_pecentage_spoiled,(sum(TIC_List[[i]]$SpoilageCon>6)/length(TIC_List[[i]]$SpoilageCon)))
+}
+
+mean(TIC_List_pecentage_spoiled)
+range (TIC_List_pecentage_spoiled)
+
+#Population Summary
+TIC_List_population<-c()
+for (i in 1:50){
+  TIC_List_population<-c(TIC_List_population,TIC_List[[i]]$SpoilageCon)
+}
+
+mean(TIC_List_population) #CFU/mL
+range (TIC_List_population)
+
+
+```
+
+
+#CI
+```{r}
+CI_List<-list()  
+Output_Milk_CI<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_CI, Interval =1/60,AF = 1.32)
+Changes_Over_Time_CI<-Output_Milk_CI[[2]]
+for (i in 1:50){
+  AnalysysDF_CI<- Appling_Changes(df = Outs_DFs_CI[[i]], Changes_Over_Time = Changes_Over_Time_CI)
+  CI_List<-append(CI_List,list(AnalysysDF_CI))
+}
+
+CI_List[[i]]
+
+CI_List_per_spoiled<-list() 
+for (i in 1:50){
+  CI_List_per_spoiled<-append(CI_List_per_spoiled,list(summary_per_spoiled(CI_List[[i]])))
+}
+
+Total_Milks_Spoiled_CI<-Extracting_Total_SpoiledMilks(Output_Name = CI_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_CI
+mean(Total_Milks_Spoiled_CI)
+range (Total_Milks_Spoiled_CI)
+
+#Range of milks per year
+CI_List_total_milks<-c()
+for (i in 1:50){
+  CI_List_total_milks<-c(CI_List_total_milks,length(CI_List[[i]]$ID))
+}
+mean(CI_List_total_milks)
+range(CI_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+CI_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  CI_List_pecentage_spoiled<-c(CI_List_pecentage_spoiled,(sum(CI_List[[i]]$SpoilageCon>6)/length(CI_List[[i]]$SpoilageCon)))
+}
+
+mean(CI_List_pecentage_spoiled)
+range (CI_List_pecentage_spoiled)
+
+#Population Summary
+CI_List_population<-c()
+for (i in 1:50){
+  CI_List_population<-c(CI_List_population,CI_List[[i]]$SpoilageCon)
+}
+
+mean(CI_List_population) #CFU/mL
+range (CI_List_population)
+
+
+```
+
+
+
+#RTB_refB
+```{r}
+RTB_refB_List<-list()  
+Output_Milk_RTB_refB<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_RTB_refB, Interval =1/60,AF = 1.32)
+Changes_Over_Time_RTB_refB<-Output_Milk_RTB_refB[[2]]
+for (i in 1:50){
+  AnalysysDF_RTB_refB<- Appling_Changes(df = Outs_DFs_RTB_refB[[i]], Changes_Over_Time = Changes_Over_Time_RTB_refB)
+  RTB_refB_List<-append(RTB_refB_List,list(AnalysysDF_RTB_refB))
+}
+
+RTB_refB_List[[i]]
+
+RTB_refB_List_per_spoiled<-list() 
+for (i in 1:50){
+  RTB_refB_List_per_spoiled<-append(RTB_refB_List_per_spoiled,list(summary_per_spoiled(RTB_refB_List[[i]])))
+}
+
+Total_Milks_Spoiled_RTB_refB<-Extracting_Total_SpoiledMilks(Output_Name = RTB_refB_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_RTB_refB
+mean(Total_Milks_Spoiled_RTB_refB)
+range (Total_Milks_Spoiled_RTB_refB)
+
+#Range of milks per year
+RTB_refB_List_total_milks<-c()
+for (i in 1:50){
+  RTB_refB_List_total_milks<-c(RTB_refB_List_total_milks,length(RTB_refB_List[[i]]$ID))
+}
+mean(RTB_refB_List_total_milks)
+range(RTB_refB_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+RTB_refB_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  RTB_refB_List_pecentage_spoiled<-c(RTB_refB_List_pecentage_spoiled,(sum(RTB_refB_List[[i]]$SpoilageCon>6)/length(RTB_refB_List[[i]]$SpoilageCon)))
+}
+
+mean(RTB_refB_List_pecentage_spoiled)
+range (RTB_refB_List_pecentage_spoiled)
+
+#Population Summary
+RTB_refB_List_population<-c()
+for (i in 1:50){
+  RTB_refB_List_population<-c(RTB_refB_List_population,RTB_refB_List[[i]]$SpoilageCon)
+}
+
+mean(RTB_refB_List_population) #CFU/mL
+range (RTB_refB_List_population)
+
+
+```
+
+
+
+
+#18C
+```{r}
+RTB_18C_List<-list()  
+Output_Milk_RTB_18C<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_RTB_18C, Interval =1/60,AF = 1.32)
+Changes_Over_Time_RTB_18C<-Output_Milk_RTB_18C[[2]]
+for (i in 1:50){
+  AnalysysDF_RTB_18C<- Appling_Changes(df = Outs_DFs_RTB_18C[[i]], Changes_Over_Time = Changes_Over_Time_RTB_18C)
+  RTB_18C_List<-append(RTB_18C_List,list(AnalysysDF_RTB_18C))
+}
+
+RTB_18C_List[[i]]
+
+RTB_18C_List_per_spoiled<-list() 
+for (i in 1:50){
+  RTB_18C_List_per_spoiled<-append(RTB_18C_List_per_spoiled,list(summary_per_spoiled(RTB_18C_List[[i]])))
+}
+
+Total_Milks_Spoiled_RTB_18C<-Extracting_Total_SpoiledMilks(Output_Name = RTB_18C_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_RTB_18C
+mean(Total_Milks_Spoiled_RTB_18C)
+range (Total_Milks_Spoiled_RTB_18C)
+
+#Range of milks per year
+RTB_18C_List_total_milks<-c()
+for (i in 1:50){
+  RTB_18C_List_total_milks<-c(RTB_18C_List_total_milks,length(RTB_18C_List[[i]]$ID))
+}
+mean(RTB_18C_List_total_milks)
+range(RTB_18C_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+RTB_18C_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  RTB_18C_List_pecentage_spoiled<-c(RTB_18C_List_pecentage_spoiled,(sum(RTB_18C_List[[i]]$SpoilageCon>6)/length(RTB_18C_List[[i]]$SpoilageCon)))
+}
+
+mean(RTB_18C_List_pecentage_spoiled)
+range (RTB_18C_List_pecentage_spoiled)
+
+#Population Summary
+RTB_18C_List_population<-c()
+for (i in 1:50){
+  RTB_18C_List_population<-c(RTB_18C_List_population,RTB_18C_List[[i]]$SpoilageCon)
+}
+
+mean(RTB_18C_List_population) #CFU/mL
+range (RTB_18C_List_population)
+
+
+
+```
+
+
+
+
+#21C
+```{r}
+RTB_21C_List<-list()  
+Output_Milk_RTB_21C<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_RTB_21C, Interval =1/60,AF = 1.32)
+Changes_Over_Time_RTB_21C<-Output_Milk_RTB_21C[[2]]
+for (i in 1:50){
+  AnalysysDF_RTB_21C<- Appling_Changes(df = Outs_DFs_RTB_21C[[i]], Changes_Over_Time = Changes_Over_Time_RTB_21C)
+  RTB_21C_List<-append(RTB_21C_List,list(AnalysysDF_RTB_21C))
+}
+
+
+
+RTB_21C_List[[i]]
+
+RTB_21C_List_per_spoiled<-list() 
+for (i in 1:50){
+  RTB_21C_List_per_spoiled<-append(RTB_21C_List_per_spoiled,list(summary_per_spoiled(RTB_21C_List[[i]])))
+}
+
+Total_Milks_Spoiled_RTB_21C<-Extracting_Total_SpoiledMilks(Output_Name = RTB_21C_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_RTB_21C
+mean(Total_Milks_Spoiled_RTB_21C)
+range (Total_Milks_Spoiled_RTB_21C)
+
+
+#Range of milks per year
+RTB_21C_List_total_milks<-c()
+for (i in 1:50){
+  RTB_21C_List_total_milks<-c(RTB_21C_List_total_milks,length(RTB_21C_List[[i]]$ID))
+}
+mean(RTB_21C_List_total_milks)
+range(RTB_21C_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+RTB_21C_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  RTB_21C_List_pecentage_spoiled<-c(RTB_21C_List_pecentage_spoiled,(sum(RTB_21C_List[[i]]$SpoilageCon>6)/length(RTB_21C_List[[i]]$SpoilageCon)))
+}
+
+mean(RTB_21C_List_pecentage_spoiled)
+range (RTB_21C_List_pecentage_spoiled)
+
+#Population Summary
+RTB_21C_List_population<-c()
+for (i in 1:50){
+  RTB_21C_List_population<-c(RTB_21C_List_population,RTB_21C_List[[i]]$SpoilageCon)
+}
+
+mean(RTB_21C_List_population) #CFU/mL
+range (RTB_21C_List_population)
+
+
+```
+
+
+
+#23C
+```{r}
+RTB_23C_List<-list()  
+Output_Milk_RTB_23C<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_RTB_23C, Interval =1/60,AF = 1.32)
+Changes_Over_Time_RTB_23C<-Output_Milk_RTB_23C[[2]]
+for (i in 1:50){
+  AnalysysDF_RTB_23C<- Appling_Changes(df = Outs_DFs_RTB_23C[[i]], Changes_Over_Time = Changes_Over_Time_RTB_23C)
+  RTB_23C_List<-append(RTB_23C_List,list(AnalysysDF_RTB_23C))
+}
+
+RTB_23C_List[[i]]
+
+RTB_23C_List_per_spoiled<-list() 
+for (i in 1:50){
+  RTB_23C_List_per_spoiled<-append(RTB_23C_List_per_spoiled,list(summary_per_spoiled(RTB_23C_List[[i]])))
+}
+
+Total_Milks_Spoiled_RTB_23C<-Extracting_Total_SpoiledMilks(Output_Name = RTB_23C_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_RTB_23C
+mean(Total_Milks_Spoiled_RTB_23C)
+range (Total_Milks_Spoiled_RTB_23C)
+
+#Range of milks per year
+RTB_23C_List_total_milks<-c()
+for (i in 1:50){
+  RTB_23C_List_total_milks<-c(RTB_23C_List_total_milks,length(RTB_23C_List[[i]]$ID))
+}
+mean(RTB_23C_List_total_milks)
+range(RTB_23C_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+RTB_23C_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  RTB_23C_List_pecentage_spoiled<-c(RTB_23C_List_pecentage_spoiled,(sum(RTB_23C_List[[i]]$SpoilageCon>6)/length(RTB_23C_List[[i]]$SpoilageCon)))
+}
+
+mean(RTB_23C_List_pecentage_spoiled)
+range (RTB_23C_List_pecentage_spoiled)
+
+#Population Summary
+RTB_23C_List_population<-c()
+for (i in 1:50){
+  RTB_23C_List_population<-c(RTB_23C_List_population,RTB_23C_List[[i]]$SpoilageCon)
+}
+
+mean(RTB_23C_List_population) #CFU/mL
+range (RTB_23C_List_population)
+
+
+```
+
+
+
+#ref7C
+```{r}
+Ref_7C_List<-list()  
+Output_Milk_Ref_7C<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_Ref_7C, Interval =1/60,AF = 1.32)
+Changes_Over_Time_Ref_7C<-Output_Milk_Ref_7C[[2]]
+for (i in 1:50){
+  AnalysysDF_Ref_7C<- Appling_Changes(df = Outs_DFs_Ref_7C[[i]], Changes_Over_Time = Changes_Over_Time_Ref_7C)
+  Ref_7C_List<-append(Ref_7C_List,list(AnalysysDF_Ref_7C))
+}
+
+Ref_7C_List[[i]]
+
+Ref_7C_List_per_spoiled<-list() 
+for (i in 1:50){
+  Ref_7C_List_per_spoiled<-append(Ref_7C_List_per_spoiled,list(summary_per_spoiled(Ref_7C_List[[i]])))
+}
+
+Total_Milks_Spoiled_Ref_7C<-Extracting_Total_SpoiledMilks(Output_Name = Ref_7C_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_Ref_7C
+mean(Total_Milks_Spoiled_Ref_7C)
+range (Total_Milks_Spoiled_Ref_7C)
+
+
+#Range of milks per year
+Ref_7C_List_total_milks<-c()
+for (i in 1:50){
+  Ref_7C_List_total_milks<-c(Ref_7C_List_total_milks,length(Ref_7C_List[[i]]$ID))
+}
+mean(Ref_7C_List_total_milks)
+range(Ref_7C_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+Ref_7C_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  Ref_7C_List_pecentage_spoiled<-c(Ref_7C_List_pecentage_spoiled,(sum(Ref_7C_List[[i]]$SpoilageCon>6)/length(Ref_7C_List[[i]]$SpoilageCon)))
+}
+
+mean(Ref_7C_List_pecentage_spoiled)
+range (Ref_7C_List_pecentage_spoiled)
+
+#Population Summary
+Ref_7C_List_population<-c()
+for (i in 1:50){
+  Ref_7C_List_population<-c(Ref_7C_List_population,Ref_7C_List[[i]]$SpoilageCon)
+}
+
+mean(Ref_7C_List_population) #CFU/mL
+range (Ref_7C_List_population)
+
+
+```
+
+#ref4C
+```{r}
+Ref_4C_List<-list()  
+Output_Milk_Ref_4C<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_Ref_4C, Interval =1/60,AF = 1.32)
+Changes_Over_Time_Ref_4C<-Output_Milk_Ref_4C[[2]]
+for (i in 1:50){
+  AnalysysDF_Ref_4C<- Appling_Changes(df = Outs_DFs_Ref_4C[[i]], Changes_Over_Time = Changes_Over_Time_Ref_4C)
+  Ref_4C_List<-append(Ref_4C_List,list(AnalysysDF_Ref_4C))
+}
+
+Ref_4C_List[[i]]
+
+Ref_4C_List_per_spoiled<-list() 
+for (i in 1:50){
+  Ref_4C_List_per_spoiled<-append(Ref_4C_List_per_spoiled,list(summary_per_spoiled(Ref_4C_List[[i]])))
+}
+
+Total_Milks_Spoiled_Ref_4C<-Extracting_Total_SpoiledMilks(Output_Name = Ref_4C_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_Ref_4C
+mean(Total_Milks_Spoiled_Ref_4C)
+range (Total_Milks_Spoiled_Ref_4C)
+
+#Range of milks per year
+Ref_4C_List_total_milks<-c()
+for (i in 1:50){
+  Ref_4C_List_total_milks<-c(Ref_4C_List_total_milks,length(Ref_4C_List[[i]]$ID))
+}
+mean(Ref_4C_List_total_milks)
+range(Ref_4C_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+Ref_4C_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  Ref_4C_List_pecentage_spoiled<-c(Ref_4C_List_pecentage_spoiled,(sum(Ref_4C_List[[i]]$SpoilageCon>6)/length(Ref_4C_List[[i]]$SpoilageCon)))
+}
+
+mean(Ref_4C_List_pecentage_spoiled)
+range (Ref_4C_List_pecentage_spoiled)
+
+#Population Summary
+Ref_4C_List_population<-c()
+for (i in 1:50){
+  Ref_4C_List_population<-c(Ref_4C_List_population,Ref_4C_List[[i]]$SpoilageCon)
+}
+
+mean(Ref_4C_List_population) #CFU/mL
+range (Ref_4C_List_population)
+
+
+```
+
+
+#ref2C
+```{r}
+Ref_2C_List<-list()  
+Output_Milk_Ref_2C<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_Ref_2C, Interval =1/60,AF = 1.32)
+Changes_Over_Time_Ref_2C<-Output_Milk_Ref_2C[[2]]
+for (i in 1:50){
+  AnalysysDF_Ref_2C<- Appling_Changes(df = Outs_DFs_Ref_2C[[i]], Changes_Over_Time = Changes_Over_Time_Ref_2C)
+  Ref_2C_List<-append(Ref_2C_List,list(AnalysysDF_Ref_2C))
+}
+
+Ref_2C_List[[i]]
+
+Ref_2C_List_per_spoiled<-list() 
+for (i in 1:50){
+  Ref_2C_List_per_spoiled<-append(Ref_2C_List_per_spoiled,list(summary_per_spoiled(Ref_2C_List[[i]])))
+}
+
+Total_Milks_Spoiled_Ref_2C<-Extracting_Total_SpoiledMilks(Output_Name = Ref_2C_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_Ref_2C
+mean(Total_Milks_Spoiled_Ref_2C)
+range (Total_Milks_Spoiled_Ref_2C)
+
+#Range of milks per year
+Ref_2C_List_total_milks<-c()
+for (i in 1:50){
+  Ref_2C_List_total_milks<-c(Ref_2C_List_total_milks,length(Ref_2C_List[[i]]$ID))
+}
+mean(Ref_2C_List_total_milks)
+range(Ref_2C_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+Ref_2C_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  Ref_2C_List_pecentage_spoiled<-c(Ref_2C_List_pecentage_spoiled,(sum(Ref_2C_List[[i]]$SpoilageCon>6)/length(Ref_2C_List[[i]]$SpoilageCon)))
+}
+
+mean(Ref_2C_List_pecentage_spoiled)
+range (Ref_2C_List_pecentage_spoiled)
+
+#Population Summary
+Ref_2C_List_population<-c()
+for (i in 1:50){
+  Ref_2C_List_population<-c(Ref_2C_List_population,Ref_2C_List[[i]]$SpoilageCon)
+}
+
+mean(Ref_2C_List_population) #CFU/mL
+range (Ref_2C_List_population)
+
+
+#Time in System
+Ref_2C_List_Time<-c()
+for (i in 1:50){
+  Ref_2C_List_Time<-c(Ref_2C_List_Time,Ref_2C_List[[i]]$TotTime)
+}
+
+
+#NONEEDEDIS TIME
+mean(Ref_2C_List_Time) #CFU/mL
+range (Ref_2C_List_Time)
+
+```
+
+#High Conts
+```{r}
+HighCont_List<-list()  
+Output_Milk_HighCont<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_RTB, Interval =1/60,AF = 1.32)
+Changes_Over_Time_HighCont<-Output_Milk_HighCont[[2]]
+for (i in 1:50){
+  AnalysysDF_HighCont<- Appling_Changes(df = Outs_DFs_HighCont[[i]], Changes_Over_Time = Changes_Over_Time_HighCont)
+  HighCont_List<-append(HighCont_List,list(AnalysysDF_HighCont))
+}
+
+HighCont_List_per_spoiled<-list() 
+for (i in 1:50){
+  HighCont_List_per_spoiled<-append(HighCont_List_per_spoiled,list(summary_per_spoiled(HighCont_List[[i]])))
+}
+
+Total_Milks_Spoiled_HighCont<-Extracting_Total_SpoiledMilks(Output_Name = HighCont_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_HighCont
+mean(Total_Milks_Spoiled_HighCont)
+range (Total_Milks_Spoiled_HighCont)
+
+
+
+#Range of milks per year
+HighCont_List_total_milks<-c()
+for (i in 1:50){
+  HighCont_List_total_milks<-c(HighCont_List_total_milks,length(HighCont_List[[i]]$ID))
+}
+mean(HighCont_List_total_milks)
+range(HighCont_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+HighCont_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  HighCont_List_pecentage_spoiled<-c(HighCont_List_pecentage_spoiled,(sum(HighCont_List[[i]]$SpoilageCon>6)/length(HighCont_List[[i]]$SpoilageCon)))
+}
+
+mean(HighCont_List_pecentage_spoiled)
+range (HighCont_List_pecentage_spoiled)
+
+#Population Summary
+HighCont_List_population<-c()
+for (i in 1:50){
+  HighCont_List_population<-c(HighCont_List_population,HighCont_List[[i]]$SpoilageCon)
+}
+
+mean(HighCont_List_population) #CFU/mL
+range (HighCont_List_population)
+
+#Time in System
+HighCont_List_Time<-c()
+for (i in 1:50){
+  HighCont_List_Time<-c(HighCont_List_Time,HighCont_List[[i]]$TotTime)
+}
+
+mean(HighCont_List_Time) #CFU/mL
+range (HighCont_List_Time)
+quantile(HighCont_List_Time, probs=c(10, 20, 30, 40, 50, 60, 70, 80, 85, 88, 89, 90, 95)/100)
+```
+
+
+
+
+#Very high conts
+```{r}
+VeryHighCont_List<-list()  
+Output_Milk_VeryHighCont<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_RTB, Interval =1/60,AF = 1.32)
+Changes_Over_Time_VeryHighCont<-Output_Milk_VeryHighCont[[2]]
+for (i in 1:50){
+  AnalysysDF_VeryHighCont<- Appling_Changes(df = Outs_DFs_VeryHighCont[[i]], Changes_Over_Time = Changes_Over_Time_VeryHighCont)
+  VeryHighCont_List<-append(VeryHighCont_List,list(AnalysysDF_VeryHighCont))
+}
+
+VeryHighCont_List_per_spoiled<-list() 
+for (i in 1:50){
+  VeryHighCont_List_per_spoiled<-append(VeryHighCont_List_per_spoiled,list(summary_per_spoiled(VeryHighCont_List[[i]])))
+}
+
+Total_Milks_Spoiled_VeryHighCont<-Extracting_Total_SpoiledMilks(Output_Name = VeryHighCont_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_VeryHighCont
+mean(Total_Milks_Spoiled_VeryHighCont)
+range (Total_Milks_Spoiled_VeryHighCont)
+
+
+
+#Range of milks per year
+VeryHighCont_List_total_milks<-c()
+for (i in 1:50){
+  VeryHighCont_List_total_milks<-c(VeryHighCont_List_total_milks,length(VeryHighCont_List[[i]]$ID))
+}
+mean(VeryHighCont_List_total_milks)
+range(VeryHighCont_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+VeryHighCont_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  VeryHighCont_List_pecentage_spoiled<-c(VeryHighCont_List_pecentage_spoiled,(sum(VeryHighCont_List[[i]]$SpoilageCon>6)/length(VeryHighCont_List[[i]]$SpoilageCon)))
+}
+
+mean(VeryHighCont_List_pecentage_spoiled)
+range (VeryHighCont_List_pecentage_spoiled)
+
+#Population Summary
+VeryHighCont_List_population<-c()
+for (i in 1:50){
+  VeryHighCont_List_population<-c(VeryHighCont_List_population,VeryHighCont_List[[i]]$SpoilageCon)
+}
+
+mean(VeryHighCont_List_population) #CFU/mL
+range (VeryHighCont_List_population)
+
+#Time in System
+VeryHighCont_List_Time<-c()
+for (i in 1:50){
+  VeryHighCont_List_Time<-c(VeryHighCont_List_Time,VeryHighCont_List[[i]]$TotTime)
+}
+
+mean(VeryHighCont_List_Time) #CFU/mL
+range (VeryHighCont_List_Time)
+quantile(VeryHighCont_List_Time, probs=c(10, 20, 30, 40, 50, 60, 70, 80, 85, 88, 89, 90, 95)/100)
+```
+
+#Med Conts
+
+```{r}
+MedCont_List<-list()  
+Output_Milk_MedCont<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_RTB, Interval =1/60,AF = 1.32)
+Changes_Over_Time_MedCont<-Output_Milk_MedCont[[2]]
+for (i in 1:50){
+  AnalysysDF_MedCont<- Appling_Changes(df = Outs_DFs_MedCont[[i]], Changes_Over_Time = Changes_Over_Time_MedCont)
+  MedCont_List<-append(MedCont_List,list(AnalysysDF_MedCont))
+}
+
+MedCont_List_per_spoiled<-list() 
+for (i in 1:50){
+  MedCont_List_per_spoiled<-append(MedCont_List_per_spoiled,list(summary_per_spoiled(MedCont_List[[i]])))
+}
+
+Total_Milks_Spoiled_MedCont<-Extracting_Total_SpoiledMilks(Output_Name = MedCont_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_MedCont
+mean(Total_Milks_Spoiled_MedCont)
+range (Total_Milks_Spoiled_MedCont)
+
+
+
+#Range of milks per year
+MedCont_List_total_milks<-c()
+for (i in 1:50){
+  MedCont_List_total_milks<-c(MedCont_List_total_milks,length(MedCont_List[[i]]$ID))
+}
+mean(MedCont_List_total_milks)
+range(MedCont_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+MedCont_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  MedCont_List_pecentage_spoiled<-c(MedCont_List_pecentage_spoiled,(sum(MedCont_List[[i]]$SpoilageCon>6)/length(MedCont_List[[i]]$SpoilageCon)))
+}
+
+mean(MedCont_List_pecentage_spoiled)
+range (MedCont_List_pecentage_spoiled)
+
+#Population Summary
+MedCont_List_population<-c()
+for (i in 1:50){
+  MedCont_List_population<-c(MedCont_List_population,MedCont_List[[i]]$SpoilageCon)
+}
+
+mean(MedCont_List_population) #CFU/mL
+range (MedCont_List_population)
+
+#Time in System
+MedCont_List_Time<-c()
+for (i in 1:50){
+  MedCont_List_Time<-c(MedCont_List_Time,MedCont_List[[i]]$TotTime)
+}
+
+mean(MedCont_List_Time) #CFU/mL
+range (MedCont_List_Time)
+quantile(MedCont_List_Time, probs=c(10, 20, 30, 40, 50, 60, 70, 80, 85, 88, 89, 90, 95)/100)
+```
+
+
+#Low Cont
+```{r}
+LowCont_List<-list()  
+Output_Milk_LowCont<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_RTB, Interval =1/60,AF = 1.32)
+Changes_Over_Time_LowCont<-Output_Milk_LowCont[[2]]
+for (i in 1:50){
+  AnalysysDF_LowCont<- Appling_Changes(df = Outs_DFs_LowCont[[i]], Changes_Over_Time = Changes_Over_Time_LowCont)
+  LowCont_List<-append(LowCont_List,list(AnalysysDF_LowCont))
+}
+
+LowCont_List_per_spoiled<-list() 
+for (i in 1:50){
+  LowCont_List_per_spoiled<-append(LowCont_List_per_spoiled,list(summary_per_spoiled(LowCont_List[[i]])))
+}
+
+Total_Milks_Spoiled_LowCont<-Extracting_Total_SpoiledMilks(Output_Name = LowCont_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_LowCont
+mean(Total_Milks_Spoiled_LowCont)
+range (Total_Milks_Spoiled_LowCont)
+
+
+
+#Range of milks per year
+LowCont_List_total_milks<-c()
+for (i in 1:50){
+  LowCont_List_total_milks<-c(LowCont_List_total_milks,length(LowCont_List[[i]]$ID))
+}
+mean(LowCont_List_total_milks)
+range(LowCont_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+LowCont_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  LowCont_List_pecentage_spoiled<-c(LowCont_List_pecentage_spoiled,(sum(LowCont_List[[i]]$SpoilageCon>6)/length(LowCont_List[[i]]$SpoilageCon)))
+}
+
+mean(LowCont_List_pecentage_spoiled)
+range (LowCont_List_pecentage_spoiled)
+
+#Population Summary
+LowCont_List_population<-c()
+for (i in 1:50){
+  LowCont_List_population<-c(LowCont_List_population,LowCont_List[[i]]$SpoilageCon)
+}
+
+mean(LowCont_List_population) #CFU/mL
+range (LowCont_List_population)
+
+#Time in System
+LowCont_List_Time<-c()
+for (i in 1:50){
+  LowCont_List_Time<-c(LowCont_List_Time,LowCont_List[[i]]$TotTime)
+}
+
+mean(LowCont_List_Time) #CFU/mL
+range (LowCont_List_Time)
+quantile(LowCont_List_Time, probs=c(10, 20, 30, 40, 50, 60, 70, 80, 85, 88, 89, 90, 95)/100)
+```
+
+#5b_4s
+
+```{r}
+s54b_List<-list()  
+Output_Milk_s54b<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_s5b4, Interval =1/60,AF = 1.32)
+Changes_Over_Time_s54b<-Output_Milk_s54b[[2]]
+for (i in 1:50){
+  AnalysysDF_s54b<- Appling_Changes(df = Outs_DFs_5s4b[[i]], Changes_Over_Time = Changes_Over_Time_s54b)
+  s54b_List<-append(s54b_List,list(AnalysysDF_s54b))
+}
+
+s54b_List_per_spoiled<-list() 
+for (i in 1:50){
+  s54b_List_per_spoiled<-append(s54b_List_per_spoiled,list(summary_per_spoiled(s54b_List[[i]])))
+}
+
+Total_Milks_Spoiled_s54b<-Extracting_Total_SpoiledMilks(Output_Name = s54b_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_s54b
+mean(Total_Milks_Spoiled_s54b)
+range (Total_Milks_Spoiled_s54b)
+
+
+
+#Range of milks per year
+s54b_List_total_milks<-c()
+for (i in 1:50){
+  s54b_List_total_milks<-c(s54b_List_total_milks,length(s54b_List[[i]]$ID))
+}
+mean(s54b_List_total_milks)
+range(s54b_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+s54b_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  s54b_List_pecentage_spoiled<-c(s54b_List_pecentage_spoiled,(sum(s54b_List[[i]]$SpoilageCon>6)/length(s54b_List[[i]]$SpoilageCon)))
+}
+
+mean(s54b_List_pecentage_spoiled)
+range (s54b_List_pecentage_spoiled)
+
+#Population Summary
+s54b_List_population<-c()
+for (i in 1:50){
+  s54b_List_population<-c(s54b_List_population,s54b_List[[i]]$SpoilageCon)
+}
+
+mean(s54b_List_population) #CFU/mL
+range (s54b_List_population)
+
+#Time in System
+s54b_List_Time<-c()
+for (i in 1:50){
+  s54b_List_Time<-c(s54b_List_Time,s54b_List[[i]]$TotTime)
+}
+
+mean(s54b_List_Time) #CFU/mL
+range (s54b_List_Time)
+quantile(s54b_List_Time, probs=c(10, 20, 30, 40, 50, 60, 70, 80, 85, 88, 89, 90, 95)/100)
+```
+#5s4BTIC
+```{r}
+s54b_List<-list()  
+Output_Milk_s54b<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_s5b4TIC, Interval =1/60,AF = 1.32)
+Changes_Over_Time_s54b<-Output_Milk_s54b[[2]]
+for (i in 1:50){
+  AnalysysDF_s54b<- Appling_Changes(df = Outs_DFs_5s4b[[i]], Changes_Over_Time = Changes_Over_Time_s54b)
+  s54b_List<-append(s54b_List,list(AnalysysDF_s54b))
+}
+
+s54b_List_per_spoiled<-list() 
+for (i in 1:50){
+  s54b_List_per_spoiled<-append(s54b_List_per_spoiled,list(summary_per_spoiled(s54b_List[[i]])))
+}
+
+Total_Milks_Spoiled_s54b<-Extracting_Total_SpoiledMilks(Output_Name = s54b_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_s54b
+mean(Total_Milks_Spoiled_s54b)
+range (Total_Milks_Spoiled_s54b)
+
+
+
+#Range of milks per year
+s54b_List_total_milks<-c()
+for (i in 1:50){
+  s54b_List_total_milks<-c(s54b_List_total_milks,length(s54b_List[[i]]$ID))
+}
+mean(s54b_List_total_milks)
+range(s54b_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+s54b_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  s54b_List_pecentage_spoiled<-c(s54b_List_pecentage_spoiled,(sum(s54b_List[[i]]$SpoilageCon>6)/length(s54b_List[[i]]$SpoilageCon)))
+}
+
+mean(s54b_List_pecentage_spoiled)
+range (s54b_List_pecentage_spoiled)
+
+#Population Summary
+s54b_List_population<-c()
+for (i in 1:50){
+  s54b_List_population<-c(s54b_List_population,s54b_List[[i]]$SpoilageCon)
+}
+
+mean(s54b_List_population) #CFU/mL
+range (s54b_List_population)
+
+#Time in System
+s54b_List_Time<-c()
+for (i in 1:50){
+  s54b_List_Time<-c(s54b_List_Time,s54b_List[[i]]$TotTime)
+}
+
+mean(s54b_List_Time) #CFU/mL
+range (s54b_List_Time)
+quantile(s54b_List_Time, probs=c(10, 20, 30, 40, 50, 60, 70, 80, 85, 88, 89, 90, 95)/100)
+```
+
+#5s4BTIP
+```{r}
+s54b_List<-list()  
+Output_Milk_s54b<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_s5b4TIP, Interval =1/60,AF = 1.32)
+Changes_Over_Time_s54b<-Output_Milk_s54b[[2]]
+for (i in 1:50){
+  AnalysysDF_s54b<- Appling_Changes(df = Outs_DFs_5s4b[[i]], Changes_Over_Time = Changes_Over_Time_s54b)
+  s54b_List<-append(s54b_List,list(AnalysysDF_s54b))
+}
+
+s54b_List_per_spoiled<-list() 
+for (i in 1:50){
+  s54b_List_per_spoiled<-append(s54b_List_per_spoiled,list(summary_per_spoiled(s54b_List[[i]])))
+}
+
+Total_Milks_Spoiled_s54b<-Extracting_Total_SpoiledMilks(Output_Name = s54b_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_s54b
+mean(Total_Milks_Spoiled_s54b)
+range (Total_Milks_Spoiled_s54b)
+
+
+
+#Range of milks per year
+s54b_List_total_milks<-c()
+for (i in 1:50){
+  s54b_List_total_milks<-c(s54b_List_total_milks,length(s54b_List[[i]]$ID))
+}
+mean(s54b_List_total_milks)
+range(s54b_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+s54b_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  s54b_List_pecentage_spoiled<-c(s54b_List_pecentage_spoiled,(sum(s54b_List[[i]]$SpoilageCon>6)/length(s54b_List[[i]]$SpoilageCon)))
+}
+
+mean(s54b_List_pecentage_spoiled)
+range (s54b_List_pecentage_spoiled)
+
+#Population Summary
+s54b_List_population<-c()
+for (i in 1:50){
+  s54b_List_population<-c(s54b_List_population,s54b_List[[i]]$SpoilageCon)
+}
+
+mean(s54b_List_population) #CFU/mL
+range (s54b_List_population)
+
+#Time in System
+s54b_List_Time<-c()
+for (i in 1:50){
+  s54b_List_Time<-c(s54b_List_Time,s54b_List[[i]]$TotTime)
+}
+
+mean(s54b_List_Time) #CFU/mL
+range (s54b_List_Time)
+quantile(s54b_List_Time, probs=c(10, 20, 30, 40, 50, 60, 70, 80, 85, 88, 89, 90, 95)/100)
+```
+
+
+
+#4s_3B
+
+```{r}
+s43b_List<-list()  
+Output_Milk_s43b<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_s4b3, Interval =1/60,AF = 1.32)
+Changes_Over_Time_s43b<-Output_Milk_s43b[[2]]
+for (i in 1:50){
+  AnalysysDF_s43b<- Appling_Changes(df = Outs_DFs_4s3b[[i]], Changes_Over_Time = Changes_Over_Time_s43b)
+  s43b_List<-append(s43b_List,list(AnalysysDF_s43b))
+}
+
+s43b_List_per_spoiled<-list() 
+for (i in 1:50){
+  s43b_List_per_spoiled<-append(s43b_List_per_spoiled,list(summary_per_spoiled(s43b_List[[i]])))
+}
+
+Total_Milks_Spoiled_s43b<-Extracting_Total_SpoiledMilks(Output_Name = s43b_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_s43b
+mean(Total_Milks_Spoiled_s43b)
+range (Total_Milks_Spoiled_s43b)
+
+
+
+#Range of milks per year
+s43b_List_total_milks<-c()
+for (i in 1:50){
+  s43b_List_total_milks<-c(s43b_List_total_milks,length(s43b_List[[i]]$ID))
+}
+mean(s43b_List_total_milks)
+range(s43b_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+s43b_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  s43b_List_pecentage_spoiled<-c(s43b_List_pecentage_spoiled,(sum(s43b_List[[i]]$SpoilageCon>6)/length(s43b_List[[i]]$SpoilageCon)))
+}
+
+mean(s43b_List_pecentage_spoiled)
+range (s43b_List_pecentage_spoiled)
+
+#Population Summary
+s43b_List_population<-c()
+for (i in 1:50){
+  s43b_List_population<-c(s43b_List_population,s43b_List[[i]]$SpoilageCon)
+}
+
+mean(s43b_List_population) #CFU/mL
+range (s43b_List_population)
+
+#Time in System
+s43b_List_Time<-c()
+for (i in 1:50){
+  s43b_List_Time<-c(s43b_List_Time,s43b_List[[i]]$TotTime)
+}
+
+mean(s43b_List_Time) #CFU/mL
+range (s43b_List_Time)
+quantile(s43b_List_Time, probs=c(10, 20, 30, 40, 50, 60, 70, 80, 85, 88, 89, 90, 95)/100)
+
+
+```
+#4S3BTIC
+```{r}
+s43b_List<-list()  
+Output_Milk_s43b<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_s4b3TIC, Interval =1/60,AF = 1.32)
+Changes_Over_Time_s43b<-Output_Milk_s43b[[2]]
+for (i in 1:50){
+  AnalysysDF_s43b<- Appling_Changes(df = Outs_DFs_4s3b[[i]], Changes_Over_Time = Changes_Over_Time_s43b)
+  s43b_List<-append(s43b_List,list(AnalysysDF_s43b))
+}
+
+s43b_List_per_spoiled<-list() 
+for (i in 1:50){
+  s43b_List_per_spoiled<-append(s43b_List_per_spoiled,list(summary_per_spoiled(s43b_List[[i]])))
+}
+
+Total_Milks_Spoiled_s43b<-Extracting_Total_SpoiledMilks(Output_Name = s43b_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_s43b
+mean(Total_Milks_Spoiled_s43b)
+range (Total_Milks_Spoiled_s43b)
+
+
+
+#Range of milks per year
+s43b_List_total_milks<-c()
+for (i in 1:50){
+  s43b_List_total_milks<-c(s43b_List_total_milks,length(s43b_List[[i]]$ID))
+}
+mean(s43b_List_total_milks)
+range(s43b_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+s43b_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  s43b_List_pecentage_spoiled<-c(s43b_List_pecentage_spoiled,(sum(s43b_List[[i]]$SpoilageCon>6)/length(s43b_List[[i]]$SpoilageCon)))
+}
+
+mean(s43b_List_pecentage_spoiled)
+range (s43b_List_pecentage_spoiled)
+
+#Population Summary
+s43b_List_population<-c()
+for (i in 1:50){
+  s43b_List_population<-c(s43b_List_population,s43b_List[[i]]$SpoilageCon)
+}
+
+mean(s43b_List_population) #CFU/mL
+range (s43b_List_population)
+
+#Time in System
+s43b_List_Time<-c()
+for (i in 1:50){
+  s43b_List_Time<-c(s43b_List_Time,s43b_List[[i]]$TotTime)
+}
+
+mean(s43b_List_Time) #CFU/mL
+range (s43b_List_Time)
+quantile(s43b_List_Time, probs=c(10, 20, 30, 40, 50, 60, 70, 80, 85, 88, 89, 90, 95)/100)
+```
+
+#4S3BTIP
+```{r}
+s43b_List<-list()  
+Output_Milk_s43b<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_s4b3TIP, Interval =1/60,AF = 1.32)
+Changes_Over_Time_s43b<-Output_Milk_s43b[[2]]
+for (i in 1:50){
+  AnalysysDF_s43b<- Appling_Changes(df = Outs_DFs_4s3b[[i]], Changes_Over_Time = Changes_Over_Time_s43b)
+  s43b_List<-append(s43b_List,list(AnalysysDF_s43b))
+}
+
+s43b_List_per_spoiled<-list() 
+for (i in 1:50){
+  s43b_List_per_spoiled<-append(s43b_List_per_spoiled,list(summary_per_spoiled(s43b_List[[i]])))
+}
+
+Total_Milks_Spoiled_s43b<-Extracting_Total_SpoiledMilks(Output_Name = s43b_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_s43b
+mean(Total_Milks_Spoiled_s43b)
+range (Total_Milks_Spoiled_s43b)
+
+
+
+#Range of milks per year
+s43b_List_total_milks<-c()
+for (i in 1:50){
+  s43b_List_total_milks<-c(s43b_List_total_milks,length(s43b_List[[i]]$ID))
+}
+mean(s43b_List_total_milks)
+range(s43b_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+s43b_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  s43b_List_pecentage_spoiled<-c(s43b_List_pecentage_spoiled,(sum(s43b_List[[i]]$SpoilageCon>6)/length(s43b_List[[i]]$SpoilageCon)))
+}
+
+mean(s43b_List_pecentage_spoiled)
+range (s43b_List_pecentage_spoiled)
+
+#Population Summary
+s43b_List_population<-c()
+for (i in 1:50){
+  s43b_List_population<-c(s43b_List_population,s43b_List[[i]]$SpoilageCon)
+}
+
+mean(s43b_List_population) #CFU/mL
+range (s43b_List_population)
+
+#Time in System
+s43b_List_Time<-c()
+for (i in 1:50){
+  s43b_List_Time<-c(s43b_List_Time,s43b_List[[i]]$TotTime)
+}
+
+mean(s43b_List_Time) #CFU/mL
+range (s43b_List_Time)
+quantile(s43b_List_Time, probs=c(10, 20, 30, 40, 50, 60, 70, 80, 85, 88, 89, 90, 95)/100)
+```
+
+
+
+## S10B
+```{r}
+s1b0_List<-list()  
+Output_Milk_s1b0<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_s1b0, Interval =1/60,AF = 1.32)
+Changes_Over_Time_s1b0<-Output_Milk_s1b0[[2]]
+for (i in 1:50){
+  AnalysysDF_s1b0<- Appling_Changes(df = Outs_DFs_1sb0[[i]], Changes_Over_Time = Changes_Over_Time_s1b0)
+  s1b0_List<-append(s1b0_List,list(AnalysysDF_s1b0))
+}
+
+s1b0_List_per_spoiled<-list() 
+for (i in 1:50){
+  s1b0_List_per_spoiled<-append(s1b0_List_per_spoiled,list(summary_per_spoiled(s1b0_List[[i]])))
+}
+
+Total_Milks_Spoiled_s1b0<-Extracting_Total_SpoiledMilks(Output_Name = s1b0_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_s1b0
+mean(Total_Milks_Spoiled_s1b0)
+range (Total_Milks_Spoiled_s1b0)
+
+
+
+#Range of milks per year
+s1b0_List_total_milks<-c()
+for (i in 1:50){
+  s1b0_List_total_milks<-c(s1b0_List_total_milks,length(s1b0_List[[i]]$ID))
+}
+mean(s1b0_List_total_milks)
+range(s1b0_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+s1b0_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  s1b0_List_pecentage_spoiled<-c(s1b0_List_pecentage_spoiled,(sum(s1b0_List[[i]]$SpoilageCon>6)/length(s1b0_List[[i]]$SpoilageCon)))
+}
+
+mean(s1b0_List_pecentage_spoiled)
+range (s1b0_List_pecentage_spoiled)
+
+#Population Summary
+s1b0_List_population<-c()
+for (i in 1:50){
+  s1b0_List_population<-c(s1b0_List_population,s1b0_List[[i]]$SpoilageCon)
+}
+
+
+mean(s1b0_List_population) #CFU/mL
+range (s1b0_List_population)
+
+#Time in System
+s1b0_List_Time<-c()
+for (i in 1:50){
+  s1b0_List_Time<-c(s1b0_List_Time,s1b0_List[[i]]$TotTime)
+}
+
+mean(s1b0_List_Time) #CFU/mL
+range (s1b0_List_Time)
+quantile(s1b0_List_Time, probs=c(10, 20, 30, 40, 50, 60, 70, 80, 85, 88, 89, 90, 95)/100)
+
+
+```
+
+## S21B
+```{r}
+s2b1_List<-list()  
+Output_Milk_s2b1<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_s2b1, Interval =1/60,AF = 1.32)
+Changes_Over_Time_s2b1<-Output_Milk_s2b1[[2]]
+for (i in 1:50){
+  AnalysysDF_s2b1<- Appling_Changes(df = Outs_DFs_2sb1[[i]], Changes_Over_Time = Changes_Over_Time_s2b1)
+  s2b1_List<-append(s2b1_List,list(AnalysysDF_s2b1))
+}
+
+s2b1_List_per_spoiled<-list() 
+for (i in 1:50){
+  s2b1_List_per_spoiled<-append(s2b1_List_per_spoiled,list(summary_per_spoiled(s2b1_List[[i]])))
+}
+
+Total_Milks_Spoiled_s2b1<-Extracting_Total_SpoiledMilks(Output_Name = s2b1_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_s2b1
+mean(Total_Milks_Spoiled_s2b1)
+range (Total_Milks_Spoiled_s2b1)
+
+
+
+#Range of milks per year
+s2b1_List_total_milks<-c()
+for (i in 1:50){
+  s2b1_List_total_milks<-c(s2b1_List_total_milks,length(s2b1_List[[i]]$ID))
+}
+mean(s2b1_List_total_milks)
+range(s2b1_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+s2b1_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  s2b1_List_pecentage_spoiled<-c(s2b1_List_pecentage_spoiled,(sum(s2b1_List[[i]]$SpoilageCon>6)/length(s2b1_List[[i]]$SpoilageCon)))
+}
+
+mean(s2b1_List_pecentage_spoiled)
+range (s2b1_List_pecentage_spoiled)
+
+#Population Summary
+s2b1_List_population<-c()
+for (i in 1:50){
+  s2b1_List_population<-c(s2b1_List_population,s2b1_List[[i]]$SpoilageCon)
+}
+
+mean(s2b1_List_population) #CFU/mL
+range (s2b1_List_population)
+
+#Time in System
+s2b1_List_Time<-c()
+for (i in 1:50){
+  s2b1_List_Time<-c(s2b1_List_Time,s2b1_List[[i]]$TotTime)
+}
+
+mean(s2b1_List_Time) #CFU/mL
+range (s2b1_List_Time)
+quantile(s2b1_List_Time, probs=c(10, 20, 30, 40, 50, 60, 70, 80, 85, 88, 89, 90, 95)/100)
+
+
+```
+
+
+
+#No_ST
+
+```{r}
+SToff_List<-list()  
+Output_Milk_SToff<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_RTB, Interval =1/60,AF = 1.32)
+Changes_Over_Time_SToff<-Output_Milk_SToff[[2]]
+for (i in 1:50){
+  AnalysysDF_SToff<- Appling_Changes(df = Outs_DFs_SToff[[i]], Changes_Over_Time = Changes_Over_Time_SToff)
+  SToff_List<-append(SToff_List,list(AnalysysDF_SToff))
+}
+
+SToff_List_per_spoiled<-list() 
+for (i in 1:50){
+  SToff_List_per_spoiled<-append(SToff_List_per_spoiled,list(summary_per_spoiled(SToff_List[[i]])))
+}
+
+Total_Milks_Spoiled_SToff<-Extracting_Total_SpoiledMilks_SToff(Output_Name = SToff_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_SToff
+mean(Total_Milks_Spoiled_SToff)
+range (Total_Milks_Spoiled_SToff)
+
+
+
+#Range of milks per year
+SToff_List_total_milks<-c()
+for (i in 1:50){
+  SToff_List_total_milks<-c(SToff_List_total_milks,length(SToff_List[[i]]$ID))
+}
+mean(SToff_List_total_milks)
+range(SToff_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+SToff_List_pecentage_spoiled<-c()
+for (i in 1:50){
+  SToff_List_pecentage_spoiled<-c(SToff_List_pecentage_spoiled,(sum(SToff_List[[i]]$SpoilageCon>6)/length(SToff_List[[i]]$SpoilageCon)))
+}
+
+mean(SToff_List_pecentage_spoiled)
+range (SToff_List_pecentage_spoiled)
+
+#Population Summary
+SToff_List_population<-c()
+for (i in 1:50){
+  SToff_List_population<-c(SToff_List_population,SToff_List[[i]]$SpoilageCon)
+}
+
+mean(SToff_List_population) #CFU/mL
+range (SToff_List_population)
+
+
+#Time in System
+SToff_List_Time<-c()
+for (i in 1:50){
+  SToff_List_Time<-c(SToff_List_Time,SToff_List[[i]]$TotTime)
+}
+
+mean(SToff_List_Time) #CFU/mL
+range (SToff_List_Time)
+quantile(SToff_List_Time, probs=c(10, 20, 30, 40, 50, 60, 70, 80, 85, 88, 89, 90, 95)/100)
+
+```
+
+
+# s3b2
+
+```{r}
+s3b2_List<-list()  
+Output_Milk_s3b2<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_s3b2, Interval =1/60,AF = 1.32)
+Changes_Over_Time_s3b2<-Output_Milk_s3b2[[2]]
+for (i in 1:50){
+  AnalysysDF_s3b2<- Appling_Changes(df = Outs_DFs_3sb2[[i]], Changes_Over_Time = Changes_Over_Time_s3b2)
+  s3b2_List<-append(s3b2_List,list(AnalysysDF_s3b2))
+}
+
+s3b2_List_per_spoiled<-list() 
+for (i in 1:50){
+  s3b2_List_per_spoiled<-append(s3b2_List_per_spoiled,list(summary_per_spoiled(s3b2_List[[i]])))
+}
+
+Total_Milks_Spoiled_s3b2<-Extracting_Total_SpoiledMilks(Output_Name = s3b2_List_per_spoiled, N_Years = 50)
+
+Total_Milks_Spoiled_s3b2
+mean(Total_Milks_Spoiled_s3b2)
+range (Total_Milks_Spoiled_s3b2)
+
+
+
+#Range of milks per year
+s3b2_List_total_milks<-c()
+for (i in 1:50){
+  s3b2_List_total_milks<-c(s3b2_List_total_milks,length(s3b2_List[[i]]$ID))
+}
+mean(s3b2_List_total_milks)
+range(s3b2_List_total_milks)
+
+
+#Percentage of spoiled milks per year
+s3b2_List_pecentage_spoiled<-c()
+for (i in 1:50){
+ s3b2_List_pecentage_spoiled<-c(s3b2_List_pecentage_spoiled,(sum(s3b2_List[[i]]$SpoilageCon>6)/length(s3b2_List[[i]]$SpoilageCon)))
+}
+
+mean(s3b2_List_pecentage_spoiled)
+range (s3b2_List_pecentage_spoiled)
+
+#Population Summary
+s3b2_List_population<-c()
+for (i in 1:50){
+  s3b2_List_population<-c(s3b2_List_population,s3b2_List[[i]]$SpoilageCon)
+}
+
+mean(s3b2_List_population) #CFU/mL
+range (s3b2_List_population)
+
+#Time in System
+s3b2_List_Time<-c()
+for (i in 1:50){
+  s3b2_List_Time<-c(s3b2_List_Time,s3b2_List[[i]]$TotTime)
+}
+
+mean(s3b2_List_Time) #CFU/mL
+range (s3b2_List_Time)
+quantile(s3b2_List_Time, probs=c(10, 20, 30, 40, 50, 60, 70, 80, 85, 88, 89, 90, 95)/100)
+
+
+```
+
+
+
+#####EXTRA######
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r warning=TRUE}
+Outputs_RTB<-Obtaining_Spoiled_Milks(Temp_Profile = Df_RT_MT_RTB, N_Years = 50 ,Service_Length = 50 ,TurningT_Length = 25)
+Outputs_RT<-Obtaining_Spoiled_Milks(Temp_Profile = Df_RT_MT_RT, N_Years = 50 ,Service_Length = 50 ,TurningT_Length = 25)
+Outputs_TIP<-Obtaining_Spoiled_Milks(Temp_Profile = Df_RT_MT_TIP, N_Years = 50 ,Service_Length = 50 ,TurningT_Length = 25)
+Outputs_TIC<-Obtaining_Spoiled_Milks(Temp_Profile = Df_RT_MT_TIC, N_Years = 50 ,Service_Length = 50 ,TurningT_Length = 25)
+Outputs_CI<-Obtaining_Spoiled_Milks(Temp_Profile = Df_RT_MT_CI, N_Years = 50 ,Service_Length = 50 ,TurningT_Length = 25)
+Outputs_RTB_refB<-Obtaining_Spoiled_Milks(Temp_Profile = Df_RT_MT_RTB_refB, N_Years = 20 ,Service_Length = 50 ,TurningT_Length = 25)
+
+Outputs_RTB_18C<-Obtaining_Spoiled_Milks(Temp_Profile = Df_RT_MT_RTB_18C, N_Years = 50 ,Service_Length = 50 ,TurningT_Length = 25)
+Outputs_RTB_21C<-Obtaining_Spoiled_Milks(Temp_Profile = Df_RT_MT_RTB_21C, N_Years = 50 ,Service_Length = 50 ,TurningT_Length = 25)
+Outputs_RTB_23C<-Obtaining_Spoiled_Milks(Temp_Profile = Df_RT_MT_RTB_23C, N_Years = 50 ,Service_Length = 50 ,TurningT_Length = 25)
+
+Outputs_ref_2C<-Obtaining_Spoiled_Milks(Temp_Profile = Df_RT_MT_Ref_2C, N_Years = 50 ,Service_Length = 50 ,TurningT_Length = 25)
+Outputs_ref_7C<-Obtaining_Spoiled_Milks(Temp_Profile = Df_RT_MT_Ref_7C, N_Years = 50 ,Service_Length = 50 ,TurningT_Length = 25)
+
+
+Extracting_Total_Milks<-function(Output_Name, N_Years){
+  Total_Milks<-c()
+  for( i in 1:N_Years){
+    Total_Milks[i]<-Output_Name[[1]][[i]]
+  }
+  return(Total_Milks)
+}
+
+
+Extracting_Total_SpoiledMilks<-function(Output_Name, N_Years){
+  Total_Milks<-c()
+  for( i in 1:N_Years){
+    Total_Milks[i]<-Output_Name[[2]][[i]][[3,2]]
+  }
+  return(Total_Milks)
+}
+
+##Baseline RTB
+Total_Milks_RTB<-Extracting_Total_Milks(Output_Name = Outputs_RTB, N_Years = 50)
+Total_Milks_Spoiled_RTB<-Extracting_Total_SpoiledMilks(Output_Name = Outputs_RTB, N_Years = 50)
+
+mean(Total_Milks_RTB)
+range(Total_Milks_RTB)
+mean(Total_Milks_Spoiled_RTB)
+range(Total_Milks_Spoiled_RTB)
+
+#RT
+Total_Milks_RT<-Extracting_Total_Milks(Output_Name = Outputs_RT, N_Years = 50)
+Total_Milks_Spoiled_RT<-Extracting_Total_SpoiledMilks(Output_Name = Outputs_RT, N_Years = 50)
+
+mean(Total_Milks_RT)
+range(Total_Milks_RT)
+mean(Total_Milks_Spoiled_RT)
+range(Total_Milks_Spoiled_RT)
+
+#TIP
+Total_Milks_TIP<-Extracting_Total_Milks(Output_Name = Outputs_TIP, N_Years = 50)
+Total_Milks_Spoiled_TIP<-Extracting_Total_SpoiledMilks(Output_Name = Outputs_TIP, N_Years = 50)
+
+mean(Total_Milks_TIP)
+range(Total_Milks_TIP)
+mean(Total_Milks_Spoiled_TIP)
+range(Total_Milks_Spoiled_TIP)
+
+#TIC
+Total_Milks_TIC<-Extracting_Total_Milks(Output_Name = Outputs_TIC, N_Years = 50)
+Total_Milks_Spoiled_TIC<-Extracting_Total_SpoiledMilks(Output_Name = Outputs_TIC, N_Years = 50)
+
+mean(Total_Milks_TIC)
+range(Total_Milks_TIC)
+mean(Total_Milks_Spoiled_TIC)
+range(Total_Milks_Spoiled_TIC)
+
+#CI
+Total_Milks_CI<-Extracting_Total_Milks(Output_Name = Outputs_CI, N_Years = 50)
+Total_Milks_Spoiled_CI<-Extracting_Total_SpoiledMilks(Output_Name = Outputs_CI, N_Years = 50)
+
+mean(Total_Milks_CI)
+range(Total_Milks_CI)
+mean(Total_Milks_Spoiled_CI)
+range(Total_Milks_Spoiled_CI)
+
+
+
+```
+
+
+
+
+## Simulated Rooom Temp B
+```{r}
+Output_Milk_RTB<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_RTB, Interval =1/60,AF = 1.32)
+Changes_Over_Time_RTB<-Output_Milk_RTB[[2]]
+
+#If data frame is large this make time ~20 mins
+AnalysysDF_RTB<- Appling_Changes(df = AnalysysDF_RTB,
+                                 Changes_Over_Time = Changes_Over_Time_RTB)
+
+```
+
+## Simulated Refrigerated Tray
+```{r}
+Output_Milk_RT<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_RT, Interval =1/60,AF = 1.32)
+Changes_Over_Time_RT<-Output_Milk_RT[[2]]
+
+#If data frame is large this make time ~20 mins
+AnalysysDF_RT<- Appling_Changes(df = AnalysysDF_RT,
+                                 Changes_Over_Time = Changes_Over_Time_RT)
+
+```
+
+## Simulated Tray with Ice Packs
+```{r}
+Output_Milk_TIP<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_TIP, Interval =1/60,AF = 1.32)
+Changes_Over_Time_TIP<-Output_Milk_TIP[[2]]
+
+#If data frame is large this make time ~20 mins
+AnalysysDF_TIP<- Appling_Changes(df = AnalysysDF_TIP,
+                                 Changes_Over_Time = Changes_Over_Time_TIP)
+
+```
+
+## Simulated Tray with Ice 
+```{r}
+Output_Milk_TIC<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_TIC, Interval =1/60,AF = 1.32)
+Changes_Over_Time_TIC<-Output_Milk_TIC[[2]]
+
+#If data frame is large this make time ~20 mins
+AnalysysDF_TIC<- Appling_Changes(df = AnalysysDF_TIC,
+                                 Changes_Over_Time = Changes_Over_Time_TIC)
+
+```
+
+## Simulated Cooler with Ice
+```{r}
+Output_Milk_CI<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_CI, Interval =1/60,AF = 1.32)
+Changes_Over_Time_CI<-Output_Milk_CI[[2]]
+
+#If data frame is large this make time ~20 mins
+AnalysysDF_CI<- Appling_Changes(df = AnalysysDF_CI,
+                                 Changes_Over_Time = Changes_Over_Time_CI)
+
+```
+
+
+## Simulated room temp b ref break
+```{r}
+Output_Milk_RTB_refB<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_RTB_refB, Interval =1/60,AF = 1.32)
+Changes_Over_Time_RTB_refB<-Output_Milk_RTB_refB[[2]]
+
+#If data frame is large this make time ~20 mins
+AnalysysDF_RTB_refB<- Appling_Changes(df = AnalysysDF_RTB_refB,
+                                 Changes_Over_Time = Changes_Over_Time_RTB_refB)
+
+```
+
+
+## Temperature 18C
+
+```{r}
+Output_Milk_RTB_18C<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_RTB_18C, Interval =1/60,AF = 1.32)
+Changes_Over_Time_RTB_18C<-Output_Milk_RTB_18C[[2]]
+
+#If data frame is large this make time ~20 mins
+AnalysysDF_RTB_18C<- Appling_Changes(df = AnalysysDF_RTB_18C,
+                                 Changes_Over_Time = Changes_Over_Time_RTB_18C)
+
+```
+
+## Temperature 21C
+```{r}
+Output_Milk_RTB_21C<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_RTB_21C, Interval =1/60,AF = 1.32)
+Changes_Over_Time_RTB_21C<-Output_Milk_RTB_21C[[2]]
+
+#If data frame is large this make time ~20 mins
+AnalysysDF_RTB_21C<- Appling_Changes(df = AnalysysDF_RTB_21C,
+                                 Changes_Over_Time = Changes_Over_Time_RTB_21C)
+
+```
+
+## Temperature 23C
+```{r}
+Output_Milk_RTB_23C<-Spoilage_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_RTB_23C, Interval =1/60,AF = 1.32)
+Changes_Over_Time_RTB_23C<-Output_Milk_RTB_23C[[2]]
+
+#If data frame is large this make time ~20 mins
+AnalysysDF_RTB_23C<- Appling_Changes(df = AnalysysDF_RTB_23C,
+                                 Changes_Over_Time = Changes_Over_Time_RTB_23C)
+
+```
+
+
+
+
+
+```{r}
+nrow(AnalysysDF)
+summary_Times(AnalysysDF)
+summary_location_per(AnalysysDF)
+summary_per_spoiled(AnalysysDF)
+summary_pop_change(AnalysysDF)
+```
+
+
+
+## Summary Statistics Room Temp B
+```{r}
+nrow(AnalysysDF_RTB)
+summary_Times(AnalysysDF_RTB)
+summary_location_per(AnalysysDF_RTB)
+summary_per_spoiled(AnalysysDF_RTB)
+summary_pop_change(AnalysysDF_RTB)
+
+```
+
+## Summary Statistics Ref Tray
+```{r}
+summary_Times(AnalysysDF_RT)
+summary_location_per(AnalysysDF_RT)
+summary_per_spoiled(AnalysysDF_RT)
+summary_pop_change(AnalysysDF_RT)
+```
+
+## Summary Statistics Tray with Ice
+```{r}
+summary_Times(AnalysysDF_TIC)
+summary_location_per(AnalysysDF_TIC)
+summary_per_spoiled(AnalysysDF_TIC)
+summary_pop_change(AnalysysDF_TIC)
+```
+
+
+
+## Summary Statistics Tray with Ice Packs
+```{r}
+summary_Times(AnalysysDF_TIP)
+summary_location_per(AnalysysDF_TIP)
+summary_per_spoiled(AnalysysDF_TIP)
+summary_pop_change(AnalysysDF_TIP)
+```
+## Summary Statistics Cooler with Ice
+```{r}
+summary_Times(AnalysysDF_CI)
+summary_location_per(AnalysysDF_CI)
+summary_per_spoiled(AnalysysDF_CI)
+summary_pop_change(AnalysysDF_CI)
+```
+
+## Summary Statistics RTB with ref in between 
+```{r}
+summary_Times(AnalysysDF_RTB_refB)
+summary_location_per(AnalysysDF_RTB_refB)
+summary_per_spoiled(AnalysysDF_RTB_refB)
+summary_pop_change(AnalysysDF_RTB_refB)
+```
+
+## Summary Statistics RTB 18C
+```{r}
+summary_Times(AnalysysDF_RTB_18C)
+summary_location_per(AnalysysDF_RTB_18C)
+summary_per_spoiled(AnalysysDF_RTB_18C)
+summary_pop_change(AnalysysDF_RTB_18C)
+```
+
+## Summary Statistics RTB 21C
+```{r}
+summary_Times(AnalysysDF_RTB_21C)
+summary_location_per(AnalysysDF_RTB_21C)
+summary_per_spoiled(AnalysysDF_RTB_21C)
+summary_pop_change(AnalysysDF_RTB_21C)
+```
+
+## Summary Statistics RTB 23C
+```{r}
+summary_Times(AnalysysDF_RTB_23C)
+summary_location_per(AnalysysDF_RTB_23C)
+summary_per_spoiled(AnalysysDF_RTB_23C)
+summary_pop_change(AnalysysDF_RTB_23C)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+AnalysysDF_RTB%>%
+  ggplot(aes(y = SpoilageCon, x= TotTime, fill= Shared, shape = Shared))+
+  geom_point( size =2, alpha = 0.7, color = "black")+
+  geom_hline(yintercept =6)+
+geom_text(aes(2000,6.5,label = "Quality Threshold = 6.0"), color = "black", size  = 3,check_overlap = TRUE)+
+  facet_wrap(.~Location)+
+  labs(x = "Residence Time in Cafeteria System (min)", y = expression("Pseudomonas poae population (log"[10]~"CFU/ml)"))+
+  scale_y_continuous()+
+  scale_shape_manual(values = c(21,23))+
+  scale_fill_manual(values = c("coral1", "seagreen3"))+
+  #scale_x_log10(n.breaks= 12)+
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme(axis.text.x = element_text(angle = -45, vjust = -0.3))+
+  theme(legend.position="bottom")+
+  geom_segment(aes(x = 1440 , y = -Inf, xend = 1440, yend = 6,linetype = "Start of Day") )+
+  geom_segment(aes(x = 2880 , y = -Inf, xend = 2880, yend = 6), linetype = "dotted") +
+  geom_segment(aes(x = 4320 , y = -Inf, xend = 4320, yend = 6), linetype = "dotted") +
+  geom_segment(aes(x = 0 , y = -Inf, xend = 0, yend = 6), linetype = "dotted") +
+  geom_segment(aes(x = 5760 , y = -Inf, xend = 5760, yend = 6), linetype = "dotted") +
+  scale_linetype_manual(name = "",values = c("dotted"))
+
+```
+
+
+
+
+##Start of the Milk Analysis based on outputs'
+
+###How many Items ended up in which locations
+```{r}
+library(scales)
+library(forcats)
+
+AnalysysDF %>% 
+  count(Location) %>% 
+  arrange(desc(n)) %>% 
+  mutate(Location = fct_reorder(Location, n)) %>%
+  ggplot(aes(x =Location, y = n/sum(n)*100))+
+  scale_y_continuous(labels = scales::percent_format(scale = 1) )+
+  geom_col()+
+  labs(x = "Final Food Location", y = "Percent of milk items by location", title= "Final Location for milk-Donation happens end of week")+
+  theme(plot.title = element_text(hjust = 0.5))+
+  coord_flip()
+  
+```
+
+###What is the distribution of time for the milk items
+
+```{r}
+AnalysysDF %>%
+  ggplot(aes(x = TotTime))+
+  geom_histogram()+
+  scale_x_continuous(n.breaks= 10)+
+  labs(x = "Time in Hours", y = "Count ", title= "Time in system by Item week")+
+  theme(plot.title = element_text(hjust = 0.5))
+  
+
+```
+
+###APC Contamination by Items
+
+```{r}
+AnalysysDF %>%
+  ggplot()+
+  geom_histogram(aes(x = SpoilageCon),color="darkblue", fill="lightblue",alpha= 0.3)+
+  geom_histogram(aes(x = InSpoilageCon),color="darkblue", fill="lightgreen", alpha= 0.3)+
+  geom_vline(xintercept =6, color= "Red")+
+  scale_x_continuous(n.breaks= 10)+
+  labs(x = "Phsychotroph Population Log CFU/ml", y = "Count", title= "Levels per milk carton")+
+  theme(plot.title = element_text(hjust = 0.5))
+```
+
+
+```{r}
+AnalysysDF %>% 
+  group_by(ConsumedAt) %>% 
+  summarise(ChangeCon = SpoilageCon-InSpoilageCon) %>% 
+  filter(ConsumedAt!="") %>% 
+  ggplot(aes(x = ChangeCon, fill = ConsumedAt))+
+  geom_histogram(bins=50)+
+  labs(x = "Change in population log CFU/ml")
+
+```
+
+
+#Relationship between Time and APC Levels
+```{r}
+p_1_log<-AnalysysDF%>% 
+  ggplot(aes(y = SpoilageCon, x= TotTime, fill= Shared, shape = Shared))+
+  geom_point( size =2, alpha = 0.7, color = "black")+
+  geom_hline(yintercept =6)+
+geom_text(aes(100,6.5,label = "Quality Threshold = 6.0"), color = "black", size  = 3,check_overlap = TRUE)+
+  facet_wrap(.~Location)+
+  labs(x = "Residence Time in Cafeteria System (min)", y = expression("Pseudomonas poae population (log"[10]~"CFU/ml)"))+
+  scale_y_continuous()+
+  scale_shape_manual(values = c(21,23))+
+  scale_fill_manual(values = c("coral1", "seagreen3"))+
+  scale_x_log10(n.breaks= 10)+
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme(axis.text.x = element_text(angle = -45, vjust = -0.3))+
+  theme(legend.position="bottom")+
+  geom_segment(aes(x = 1440 , y = -Inf, xend = 1440, yend = 6,linetype = "Start of Day"))+
+  geom_segment(aes(x = 2880 , y = -Inf, xend = 2880, yend = 6), linetype = "dotted") +
+  geom_segment(aes(x = 4320 , y = -Inf, xend = 4320, yend = 6), linetype = "dotted") +
+  geom_segment(aes(x = 0 , y = -Inf, xend = 0, yend = 6), linetype = "dotted")  +
+  geom_segment(aes(x = 5760 , y = -Inf, xend = 5760, yend = 6), linetype = "dotted") +
+  scale_linetype_manual(name = "",values = c("dotted"))
+
+p_1_log
+
+#ggsave("Share Table Spoilage-log.jpg", width =8, height = 5, units = "in", dpi = 300)
+
+
+p_1<-AnalysysDF%>%
+  ggplot(aes(y = SpoilageCon, x= TotTime, fill= Shared, shape = Shared))+
+  geom_point( size =2, alpha = 0.7, color = "black")+
+  geom_hline(yintercept =6)+
+geom_text(aes(2000,6.5,label = "Quality Threshold = 6.0"), color = "black", size  = 3,check_overlap = TRUE)+
+  facet_wrap(.~Location)+
+  labs(x = "Residence Time in Cafeteria System (min)", y = expression("Pseudomonas poae population (log"[10]~"CFU/ml)"))+
+  scale_y_continuous()+
+  scale_shape_manual(values = c(21,23))+
+  scale_fill_manual(values = c("coral1", "seagreen3"))+
+  #scale_x_log10(n.breaks= 12)+
+  theme_bw() +
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme(axis.text.x = element_text(angle = -45, vjust = -0.3))+
+  theme(legend.position="bottom")+
+  geom_segment(aes(x = 1440 , y = -Inf, xend = 1440, yend = 6,linetype = "Start of Day") )+
+  geom_segment(aes(x = 2880 , y = -Inf, xend = 2880, yend = 6), linetype = "dotted") +
+  geom_segment(aes(x = 4320 , y = -Inf, xend = 4320, yend = 6), linetype = "dotted") +
+  geom_segment(aes(x = 0 , y = -Inf, xend = 0, yend = 6), linetype = "dotted") +
+  geom_segment(aes(x = 5760 , y = -Inf, xend = 5760, yend = 6), linetype = "dotted") +
+  scale_linetype_manual(name = "",values = c("dotted"))
+
+p_1
+
+#ggsave("Share Table Spoilage-NonLog.jpg", width =8, height = 5, units = "in", dpi = 300)
+
+
+```
+
+#Change in Contamination Levels due to Time
+  ##Need to figure out a way to track contamination change. 
+```{r}
+AnalysysDF %>% 
+  mutate(Change_Cont = SpoilageCon-InSpoilageCon) %>% 
+  ggplot(aes(y = Change_Cont, x= TotTime, fill = Shared))+
+  geom_point( size =2, shape = 21, alpha = 0.7)+
+  facet_wrap(.~Location)+
+  labs(x = "Residence Time in Cafeteria System (min)", y = expression("Pseudomonas poae population Change (log"[10]~"CFU/ml"))+
+  scale_y_continuous()+
+  scale_x_log10(n.breaks= 10)+
+  theme(plot.title = element_text(hjust = 0.5))+
+  theme_bw()+
+  theme(legend.position="bottom")+
+  theme(axis.text.x = element_text(angle = -45, vjust = -0.3))
+
+#ggsave("growth over time 2.0.jpg", width =8, height = 5, units = "in", dpi = 300)
+
+
+```
+
+```{r}
+
+Normal<-AnalysysDF %>% 
+  mutate(Change_Cont = SpoilageCon-InSpoilageCon)
+
+mean(Normal$Change_Cont)
+quantile(Normal$Change_Cont)
+
+MostExtreme<-AnalysysDF %>% 
+  mutate(Change_Cont = SpoilageCon-InSpoilageCon)
+
+mean(MostExtreme$Change_Cont)
+quantile(MostExtreme$Change_Cont)
+
+mean((AnalysysDF$TotTime))
+quantile(AnalysysDF$TotTime, 0.975)
+
+sum(AnalysysDF$Shared == "Yes")/ length(AnalysysDF$Shared)
+
+
+#Total Time
+AnalysysDF %>% 
+  filter(Shared == "No") %>% 
+  summarize(median(TotTime), q25 = quantile(TotTime, 0.025), q975 = quantile(TotTime, 0.975))
+
+#Population Change
+AnalysysDF %>% 
+  filter(Shared == "Yes") %>% 
+  summarize(median(SpoilageCon - InSpoilageCon), q25 = quantile(SpoilageCon - InSpoilageCon, 0.025), q975 = quantile(SpoilageCon - InSpoilageCon, 0.975))
+
+#Spoiled Milks
+AnalysysDF %>% 
+  filter(Shared == "Yes") %>% 
+  summarize(sum(SpoilageCon>6))
+
+(4/450806) *100
+(4/103309) *100
+
+#Percent of consumed milk
+
+AnalysysDF %>% 
+  filter(Location == "Consumed") %>% 
+  filter(TotTime<7200)
+
+(((871105))/969021) *100
+((964226-(871105))/969021) *100
+((968993-968611)/969021)*100
+((969021-968993)/969021)*100
+
+
+#Summaries
+AnalysysDF %>% 
+  #filter(Location == "Consumed") %>% 
+  nrow()
+385701/450806
+
+AnalysysDF %>% 
+  filter(Location == "Discarded") %>% 
+  nrow()
+52856/450806
+
+AnalysysDF %>% 
+  filter(Location == "Donated") %>% 
+  nrow()
+12249/450806
+
+#Summaries
+AnalysysDF %>% 
+  filter(Location == "Consumed") %>%
+  #filter(TotTime<1440) %>% 
+  #filter(TotTime>1440 && TotTime<2280) %>% 
+  #filter(TotTime>1440*2 && TotTime<1440*3) %>% 
+  filter(TotTime>1440*3 && TotTime<1440*4) %>%
+  #filter(TotTime>1440*4 && TotTime<1440*5) %>%
+  nrow()
+(13/385701)*100
+
+AnalysysDF %>% 
+  filter(Location == "Discarded") %>%
+  #filter(TotTime<1440) %>% 
+  #filter(TotTime>1440 && TotTime<2280) %>% 
+  #filter(TotTime>1440*2 && TotTime<1440*3) %>% 
+  filter(TotTime>1440*3 && TotTime<1440*4) %>%
+  #filter(TotTime>1440*4 && TotTime<1440*5) %>%
+  nrow()
+(2/52856)*100
+
+AnalysysDF %>% 
+  filter(Location == "Donated") %>% 
+  #filter(TotTime<1440) %>% 
+  #filter(TotTime>1440 && TotTime<2280) %>% 
+  #filter(TotTime>1440*2 && TotTime<1440*3) %>% 
+  filter(TotTime>1440*3 && TotTime<1440*4) %>%
+  #filter(TotTime>1440*4 && TotTime<1440*5) %>%
+  nrow()
+(5/12249)*100
+
+```
+
+
+
+#
+```{r}
+Pre_Data_Full %>% 
+  filter(Location=="Shared")
+```
+
+
+
