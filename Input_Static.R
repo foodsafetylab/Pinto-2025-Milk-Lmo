@@ -19,10 +19,10 @@
   
   N_Iterations<-round((Students_p_grade*NSLP_rate),0) #65
   
-  ########## FOR COREA Et al ##################
+  ########## FOR PINTO Et al ##################
   
   #Serivices, number of days we are trying to iterate. Lunch periods per day
-  Service_No<-3 #2 is baseline
+  Service_No<-2 #2 is baseline
   
   #Days we are trying to Iterate. Days
   Food_Days<-5 #Baseline is 5
@@ -32,8 +32,8 @@
   
   
 #Lengths for milk model #need to make sense with no services all have to add up to 1440
-  Time_Service_Length = 31 #Baseline is 50
-  Time_Turnaround_Length = 16 #Baseline 25
+  Time_Service_Length = 50 #Baseline is 50
+  Time_Turnaround_Length = 25 #Baseline 25
   Time_Overnight_Length = 1315 #Baseline is 1315, A day has 1440 min
   
   
@@ -95,15 +95,20 @@
   Pr_eat_Pre<-.674 #.85
 
   
+  
+  ######### FOR PINTO Et al ####################
+  
+  # Input for Milk Listeria ------------------------------------
+  Milk_Con_Mean <- -3.99 #0.3 MPN/g in 2005 paper # new prevalence distribution, simulate in Excel
+  Milk_Con_SD <- 0.8
+  Listeria_Safety_Treshold<-2 #For LM updated to 2, since this will be the level we set for baseline
+ 
+
+  
   ########## FOR COREA Et al ##################
   
-  # Inputs for Milk Spoilage -------------------------------------------------
-  Milk_Con_Mean<-0.38 # 0.38 #-1.77, q2.5 #2.52 q97.5, 0.38 q50 #3.21 q99.5
-  Milk_Con_SD<-1.1 #1.1 baseline, 0 when running initial contamination  
-  
-  ########## FOR COREA Et al ##################
-  
-  Spoilage_Treshold<-6 #Considered spoiled milk. Physchotrophs log CFU/g, not part of the corea model
+  Spoilage_Treshold<-2 
+  #6 Considered spoiled milk. Physchotrophs log CFU/g, not part of the corea model
   
   #quantile(rnorm(100000,0.38,1.1),.50)
   
@@ -274,8 +279,9 @@
   Wash_Bucket<-0
   
 #Milk Spoilage?
-  
   Milk_Spoilage_YN<-TRUE
+#Milk Listeria growth? 
+  Milk_Listeria_YN<-TRUE 
 #Donation end of weeks
   Donation_End_Week <-TRUE
   

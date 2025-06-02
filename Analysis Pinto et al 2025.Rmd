@@ -1,0 +1,987 @@
+ins---
+title: "Milk Analysis"
+author: "Gustavo Reyes"
+date: "10/25/2021"
+output: html_document
+---
+#Milk Analysis: 
+
+```{r}
+#Setting Working Directory-------------------------------------
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path)) #Set working directory to the path of document
+```
+
+## Loading Libraries
+```{r ,echo=FALSE warning=FALSE}
+#Opening Libary and Inputs-------------------------------------
+source("Util_Library.R")
+source("Functions_Full_Analysis.R")
+```
+
+## Loading Model Necessary Inputs. 
+```{r, include=FALSE}
+library(tidyverse)
+#Inputs and Source Files-------------------------------------
+#Inputs
+source("Main_Loop.R")
+source("Input_Static.R")
+source("Input_Functions.R")
+source("Util_DFFunctions.R")
+source("Util_DFWeekCreation.R")
+source("Util_Counter&Lists.R")
+#Functions
+source("Util_Functions.R")
+source("Util_CCFunctions2.R")
+source("Util_Output_Functions.R")
+```
+
+## Functions for growth and lag phases 
+```{r}
+#Function for growth and lag phase
+#Note for Lmo changed the minimum growth temp (T0) to uniform distribution taken from Ramos et al 2023, Koutsoumanis et al. 2010 use Normal (−2.47, 1.26) for T0, which is another option
+#Old temp is the 5C reference temp # distribution from Ramos T0 = runif(1,-2,-1), we use -2 here as worst case
+new_growth_rate<-function(newTemp, oldMu,oldTemp = 5, T0 = -2){
+  newMu<-(((newTemp-T0)/(oldTemp-T0))^2)* oldMu #in alignment with WHO FAO 2004 & Ramos et al 2023 equation, note change to square the value of the first term of the equation
+  return (newMu)
+}
+
+#Calculation of the new lag time.
+new_lag_time <- function (newTemp, oldLag, oldTemp = 5, T0 = -2) {
+  numerator <- oldTemp -T0
+  denom <- newTemp - T0
+  newLag <- ( (numerator / denom)^2) * oldLag
+  return(newLag)
+}
+```
+
+#Function for lag models and buchanan three-phrase model
+```{r}
+#This function calculates thee growth based on a time and temperature profile for 1 specific milk with Listeria monocytogenes 
+Func_Growth_LagCon<-function(In_Lag_Consumed, Time_Temp_df,Interval, AF){
+  #In_Lag_Consumed= Total lag time consumed
+  #Time_Temp_df = dataframe with time and temperature conditions
+  #Interval = time interval in the time_temp_df in hrs. 
+  Total_Lag_Consumed = In_Lag_Consumed
+  Total_Growth = 0
+  old_lag = 0 #for now assuming no lag
+  NMax = 8.5 #came from Koutsoumanis et al. 2010
+  old_mumax = 0.0181 #runif(1, 0.00383, 0.0181) #converted WHO FAO 2004 value for Lm growth at 5C in milk
+  Growth_V = c()
+  for (i in 1:nrow(Time_Temp_df)){
+    if (Total_Lag_Consumed <1 && old_lag!=0){
+      Lag_t_interval<-new_lag_time(newTemp = Time_Temp_df$MilkTemp[i], oldLag = old_lag)
+      Lag_Consumed<-Interval/Lag_t_interval
+      Total_Lag_Consumed<-Total_Lag_Consumed+Lag_Consumed
+      Growth = 0
+    } else if (Total_Lag_Consumed>=1 | old_lag == 0){
+      Growth = ((new_growth_rate(newTemp = Time_Temp_df$MilkTemp[i], oldMu = old_mumax))*AF)
+      Total_Growth = Total_Growth + (Growth*Interval)
+    }
+    Growth_V = c(Growth_V,Total_Growth)
+    #print(length(Growth_V))
+  }
+  return(list(Total_Growth,Total_Lag_Consumed,Growth_V))
+}
+
+#Buchanan three phrase function
+LMO_Function_Single_Milk<-function(Cont, Pop_Max, Time_Temp_df, Interval =1/60, AF){
+  Lag_Consumed = 0
+  #this function provides two outputs, the total growth, and the new updated lag phase consumed. 
+  Output_Milk<-Func_Growth_LagCon(In_Lag_Consumed = Lag_Consumed ,Time_Temp_df = Time_Temp_df,Interval = Interval, AF=AF)
+  Lag_Consumed = Output_Milk[[2]]
+  Cont<-Output_Milk[[1]]+Cont
+  if( Cont>Pop_Max){
+     Cont = Pop_Max
+  }
+  return (list(Cont,Output_Milk[[3]]))
+}
+```
+
+#Function to apply growth model in milk based on time and temperature profile
+```{r}
+#Applying Changes over time with N max limit
+Appling_Changes<-function(df,Changes_Over_Time){
+  NMax = 8.5 #updated 
+  Contamination_v<-df$InLMOCon
+  Time_V<-df$TotTime
+  Final_contamination_v<-c()
+  for (i in 1:nrow(df)){
+    In_Cont<-Contamination_v[i]
+    Time<-Time_V[i]
+    if (Time == 0){
+      Total_Growth = 0
+    }else{
+      Total_Growth<-Changes_Over_Time[Time]
+    }
+    Final_Con<-In_Cont+Total_Growth
+    if(Final_Con>NMax){
+      Final_Con <- NMax
+    }
+    Final_contamination_v<-c(Final_contamination_v,Final_Con)
+  }
+  df$LMOCon<-Final_contamination_v
+  return(df)
+}
+```
+
+
+#Importing time and Temp Profiles. 
+```{r}
+#Before Running this make sure that the files from "Time and Temperature Profiles.rmd" have been generated accordingly
+
+## Primary Scenarios
+#Room Temp B
+Df_RT_MT_RTB<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_RTB.csv") 
+#Refrigerated Tray
+Df_RT_MT_RT<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_RT.csv") 
+#Tray With Ice Packs
+Df_RT_MT_TIP<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_TIP.csv") 
+#Tray with Ice 
+Df_RT_MT_TIC<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_TIC.csv") 
+#Cooler with Ice
+Df_RT_MT_CI<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_CI.csv")
+#room temp b with ref break
+Df_RT_MT_RTB_refB<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_RTB_refB.csv")
+
+## Temperature Scenarios
+#Room Temp B
+Df_RT_MT_RTB_18C<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_RTB_18C.csv") 
+#Refrigerated Tray
+Df_RT_MT_RTB_21C<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_RTB_21C.csv") 
+#Tray With Ice Packs
+Df_RT_MT_RTB_23C<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_RTB_23C.csv") 
+
+## Updated Refrigeration Temps
+#At 7 C
+Df_RT_MT_Ref_7C<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_Ref_7C.csv") 
+#At 2 C 
+Df_RT_MT_Ref_2C<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_Ref_2C.csv")
+#At 4 C 
+Df_RT_MT_Ref_4C<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_Ref_4C.csv")
+
+
+#Bell Schedule Scenarios
+#Very long
+Df_RT_MT_s5b4<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s5b4.csv")
+#Long
+Df_RT_MT_s4b3<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s4b3.csv")
+#Very short
+Df_RT_MT_s1b0<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s1b0.csv")
+#Short
+Df_RT_MT_s2b1<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s2b1.csv")
+#Medium
+Df_RT_MT_s3b2<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s3b2.csv")
+#Long + Tray with Ice 
+Df_RT_MT_s4b3TIC<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s4b3TIC.csv")
+#Long + Tray with Ice Packs
+Df_RT_MT_s4b3TIP<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s4b3TIP.csv")
+#Very long + Tray with Ice 
+Df_RT_MT_s5b4TIC<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s5b4TIC.csv")
+#very long + Tray with Ice Packs
+Df_RT_MT_s5b4TIP<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s5b4TIP.csv")
+```
+
+
+##Running the  Model for Milk.
+
+If conditions are changed, need to change in the input_static, Service Outputs, Days Outputs files.
+
+- To change the number of weeks: Input_Static : Sens_Iterations
+- To change the number of Days, Services: Input_Static : Days_No, Service_No
+- To Change the Service Time: Input Static: Time_Service_Length
+- To change the In between Input Static: Time_Turnaround_Length
+- To Change the Overnight Storage time: Input Static: Time_Overnight_Length
+- To Change the contamination levels: Input Static: Milk_Con_Mean, and Milk_Con_SD
+
+The simulation below will generate all the milks throughout the 37*50 weeks for baseline length of service. 
+Then we will run the simulation with input_static that toggles the ST off and 5 different lengths of services. 
+
+```{r warning=TRUE}
+#This chunk Runs the ST Model 
+Obtaining_LMO_Milks_DFs<-function(N_Years, Service_Length,TurningT_Length){
+  final_list <- list()
+  #Define the length of periods to match your model to properly adjust time. 
+  Service_Length = Service_Length#50
+  TurningT_Length = TurningT_Length#25
+  
+  for (i in 1:N_Years){
+    print(i)
+    start_time<-Sys.time()
+    source("Main_Loops2.R")
+    
+    #1. Start from here
+    Individual_Analysis_Milk<-rbind.fill(List_Sens_Pre)
+    
+    #2. find the duplicates
+    
+    #this step filters replicated based on the ID
+    Individual_Analysis_Milk<-Individual_Analysis_Milk %>% 
+      group_by(ID) %>% 
+      filter(TotServices==max(TotServices))
+    
+    #3. Add time to the system
+    AnalysysDF<-Individual_Analysis_Milk
+    #Adding the time of the services for those milks that were added to the service line during the lunch period.
+    AnalysysDF[AnalysysDF$Initial.Service>1,]
+    AnalysysDF$TotTime<-AnalysysDF$TotTime+(as.integer(AnalysysDF$Initial.Service)-1)*(Service_Length+TurningT_Length)
+    
+    AnalysysDF$Shared<-ifelse(AnalysysDF$STtimes>0, "Yes", "No")
+    
+    final_list<-append(final_list,list(AnalysysDF))
+    end_time<-Sys.time()
+  
+    Total_time<-end_time-start_time
+    print(Total_time)
+  }
+  return(final_list)
+}
+```
+
+
+### When running up to this point
+```{r warning=TRUE}
+
+#normal service, changes in time and temp profile #this runs the model
+source("Input_Static.R")
+Outs_DFs<-Obtaining_LMO_Milks_DFs(N_Years = 50, Service_Length = 50,TurningT_Length = 25) 
+
+Outs_DFs_RTB<-Outs_DFs
+Outs_DFs_RT<-Outs_DFs
+Outs_DFs_TIP<-Outs_DFs
+Outs_DFs_TIC<-Outs_DFs
+Outs_DFs_CI<-Outs_DFs
+Outs_DFs_RTB_refB<-Outs_DFs
+Outs_DFs_RTB_18C<-Outs_DFs
+Outs_DFs_RTB_21C<-Outs_DFs
+Outs_DFs_RTB_23C<-Outs_DFs
+Outs_DFs_Ref_7C<-Outs_DFs
+Outs_DFs_Ref_2C<-Outs_DFs
+Outs_DFs_Ref_4C<-Outs_DFs
+```
+
+#ST off model run 
+```{r warning=TRUE}
+
+source("Input_Static_stoff.R")
+Outs_DFs_SToff<-Obtaining_LMO_Milks_DFs(N_Years = 50, Service_Length = 50,TurningT_Length = 25)
+```
+
+
+# Difference Services model run
+```{r warning=TRUE}
+#Difference Services
+source("Input_Static_s1b0.R")
+Outs_DFs_1sb0<-Obtaining_LMO_Milks_DFs(N_Years = 50, Service_Length = 40,TurningT_Length = 0)
+
+source("Input_Static_s2b1.R")
+Outs_DFs_2sb1<-Obtaining_LMO_Milks_DFs(N_Years = 50, Service_Length = 30,TurningT_Length = 14)
+
+source("Input_Static_s3b2.R")
+Outs_DFs_3sb2<-Obtaining_LMO_Milks_DFs(N_Years = 50, Service_Length = 31,TurningT_Length = 16)
+
+source("Input_Static_s4b3.R")
+Outs_DFs_4s3b<-Obtaining_LMO_Milks_DFs(N_Years = 50, Service_Length = 50,TurningT_Length = 7)
+
+source("Input_Static_s5b4.R") 
+Outs_DFs_5s4b<-Obtaining_LMO_Milks_DFs(N_Years = 50, Service_Length = 50,TurningT_Length = 4)
+
+#Longer Bell Schedules Plus Storage Systems 
+source("Input_Static_s4b3.R")
+Outs_DFs_4sb3TIC<-Outs_DFs_4s3b
+
+source("Input_Static_s4b3.R")
+Outs_DFs_4sb3TIP<-Outs_DFs_4s3b
+
+source("Input_Static_s5b4.R")
+Outs_DFs_5sb4TIC<-Outs_DFs_5s4b
+
+source("Input_Static_s5b4.R")
+Outs_DFs_5sb4TIP<-Outs_DFs_5s4b
+```
+
+
+# Generate the conbimed dataset (50 years in one dataframe) for each condition. 
+#Baseline service, Storage Conditions
+##RTB
+```{r}
+RTB_List<-list()  
+Output_Milk_RTB<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_RTB, Interval =1/60,AF = 1)
+Changes_Over_Time_RTB<-Output_Milk_RTB[[2]]
+
+for (i in 1:50){
+  AnalysysDF_RTB<- Appling_Changes(df = Outs_DFs_RTB[[i]], Changes_Over_Time = Changes_Over_Time_RTB)
+  RTB_List<-append(RTB_List,list(AnalysysDF_RTB))
+}
+
+RTB_List[[i]]
+
+RTB_Combined <- bind_rows(RTB_List)
+
+```
+
+##RTR
+```{r}
+RT_List<-list()  
+Output_Milk_RT<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_RT, Interval =1/60,AF = 1)
+Changes_Over_Time_RT<-Output_Milk_RT[[2]]
+for (i in 1:50){
+  AnalysysDF_RT<- Appling_Changes(df = Outs_DFs_RT[[i]], Changes_Over_Time = Changes_Over_Time_RT)
+  RT_List<-append(RT_List,list(AnalysysDF_RT))
+}
+
+
+RT_List[[i]]
+
+RT_Combined <- bind_rows(RT_List)
+
+```
+
+
+##TIP
+```{r}
+TIP_List<-list()  
+Output_Milk_TIP<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_TIP, Interval =1/60,AF = 1)
+Changes_Over_Time_TIP<-Output_Milk_TIP[[2]]
+for (i in 1:50){
+  AnalysysDF_TIP<- Appling_Changes(df = Outs_DFs_TIP[[i]], Changes_Over_Time = Changes_Over_Time_TIP)
+  TIP_List<-append(TIP_List,list(AnalysysDF_TIP))
+}
+
+TIP_List[[i]]
+
+TIP_Combined <- bind_rows(TIP_List)
+```
+
+
+
+##TIC
+```{r}
+TIC_List<-list()  
+Output_Milk_TIC<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_TIC, Interval =1/60,AF = 1)
+Changes_Over_Time_TIC<-Output_Milk_TIC[[2]]
+for (i in 1:50){
+  AnalysysDF_TIC<- Appling_Changes(df = Outs_DFs_TIC[[i]], Changes_Over_Time = Changes_Over_Time_TIC)
+  TIC_List<-append(TIC_List,list(AnalysysDF_TIC))
+}
+
+TIC_List[[i]]
+
+TIC_Combined <- bind_rows(TIC_List)
+
+```
+
+
+##CI
+```{r}
+CI_List<-list()  
+Output_Milk_CI<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_CI, Interval =1/60,AF = 1)
+Changes_Over_Time_CI<-Output_Milk_CI[[2]]
+for (i in 1:50){
+  AnalysysDF_CI<- Appling_Changes(df = Outs_DFs_CI[[i]], Changes_Over_Time = Changes_Over_Time_CI)
+  CI_List<-append(CI_List,list(AnalysysDF_CI))
+}
+
+CI_List[[i]]
+
+CI_Combined <- bind_rows(CI_List)
+```
+
+
+
+##RTB_refB
+```{r}
+RTB_refB_List<-list()  
+Output_Milk_RTB_refB<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_RTB_refB, Interval =1/60,AF = 1)
+Changes_Over_Time_RTB_refB<-Output_Milk_RTB_refB[[2]]
+for (i in 1:50){
+  AnalysysDF_RTB_refB<- Appling_Changes(df = Outs_DFs_RTB_refB[[i]], Changes_Over_Time = Changes_Over_Time_RTB_refB)
+  RTB_refB_List<-append(RTB_refB_List,list(AnalysysDF_RTB_refB))
+}
+
+RTB_refB_List[[i]]
+
+RTB_refB_Combined <- bind_rows(RTB_refB_List)
+```
+
+
+#Room Temperature Conditions
+##18C
+```{r}
+RTB_18C_List<-list()  
+Output_Milk_RTB_18C<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_RTB_18C, Interval =1/60,AF = 1)
+Changes_Over_Time_RTB_18C<-Output_Milk_RTB_18C[[2]]
+for (i in 1:50){
+  AnalysysDF_RTB_18C<- Appling_Changes(df = Outs_DFs_RTB_18C[[i]], Changes_Over_Time = Changes_Over_Time_RTB_18C)
+  RTB_18C_List<-append(RTB_18C_List,list(AnalysysDF_RTB_18C))
+}
+
+RTB_18C_List[[i]]
+
+RTB_18C_Combined <- bind_rows(RTB_18C_List)
+```
+
+
+
+
+##21C
+```{r}
+RTB_21C_List<-list()  
+Output_Milk_RTB_21C<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_RTB_21C, Interval =1/60,AF = 1)
+Changes_Over_Time_RTB_21C<-Output_Milk_RTB_21C[[2]]
+for (i in 1:50){
+  AnalysysDF_RTB_21C<- Appling_Changes(df = Outs_DFs_RTB_21C[[i]], Changes_Over_Time = Changes_Over_Time_RTB_21C)
+  RTB_21C_List<-append(RTB_21C_List,list(AnalysysDF_RTB_21C))
+}
+
+
+RTB_21C_List[[i]]
+
+RTB_21C_Combined <- bind_rows(RTB_21C_List)
+```
+
+
+
+##23C
+```{r}
+RTB_23C_List<-list()  
+Output_Milk_RTB_23C<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_RTB_23C, Interval =1/60,AF = 1)
+Changes_Over_Time_RTB_23C<-Output_Milk_RTB_23C[[2]]
+for (i in 1:50){
+  AnalysysDF_RTB_23C<- Appling_Changes(df = Outs_DFs_RTB_23C[[i]], Changes_Over_Time = Changes_Over_Time_RTB_23C)
+  RTB_23C_List<-append(RTB_23C_List,list(AnalysysDF_RTB_23C))
+}
+
+RTB_23C_List[[i]]
+
+RTB_23C_Combined <- bind_rows(RTB_23C_List)
+
+```
+
+
+
+#Refrigeration Temperature Conditions
+##ref7C
+```{r}
+Ref_7C_List<-list()  
+Output_Milk_Ref_7C<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_Ref_7C, Interval =1/60,AF = 1)
+Changes_Over_Time_Ref_7C<-Output_Milk_Ref_7C[[2]]
+for (i in 1:50){
+  AnalysysDF_Ref_7C<- Appling_Changes(df = Outs_DFs_Ref_7C[[i]], Changes_Over_Time = Changes_Over_Time_Ref_7C)
+  Ref_7C_List<-append(Ref_7C_List,list(AnalysysDF_Ref_7C))
+}
+
+Ref_7C_List[[i]]
+
+Ref_7C_Combined <- bind_rows(Ref_7C_List)
+
+```
+
+##ref4C
+```{r}
+Ref_4C_List<-list()  
+Output_Milk_Ref_4C<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_Ref_4C, Interval =1/60,AF = 1)
+Changes_Over_Time_Ref_4C<-Output_Milk_Ref_4C[[2]]
+for (i in 1:50){
+  AnalysysDF_Ref_4C<- Appling_Changes(df = Outs_DFs_Ref_4C[[i]], Changes_Over_Time = Changes_Over_Time_Ref_4C)
+  Ref_4C_List<-append(Ref_4C_List,list(AnalysysDF_Ref_4C))
+}
+
+Ref_4C_List[[i]]
+
+Ref_4C_Combined <- bind_rows(Ref_4C_List)
+
+```
+
+
+##ref2C
+```{r}
+Ref_2C_List<-list()  
+Output_Milk_Ref_2C<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_Ref_2C, Interval =1/60,AF = 1)
+Changes_Over_Time_Ref_2C<-Output_Milk_Ref_2C[[2]]
+for (i in 1:50){
+  AnalysysDF_Ref_2C<- Appling_Changes(df = Outs_DFs_Ref_2C[[i]], Changes_Over_Time = Changes_Over_Time_Ref_2C)
+  Ref_2C_List<-append(Ref_2C_List,list(AnalysysDF_Ref_2C))
+}
+
+Ref_2C_List[[i]]
+
+Ref_2C_Combined <- bind_rows(Ref_2C_List)
+```
+
+
+
+
+#Number of Services and Breaks
+##s1b0
+```{r}
+s1b0_List<-list()  
+Output_Milk_s1b0<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_s1b0, Interval =1/60,AF = 1)
+Changes_Over_Time_s1b0<-Output_Milk_s1b0[[2]]
+for (i in 1:50){
+  AnalysysDF_s1b0<- Appling_Changes(df = Outs_DFs_1sb0[[i]], Changes_Over_Time = Changes_Over_Time_s1b0)
+  s1b0_List<-append(s1b0_List,list(AnalysysDF_s1b0))
+}
+s1b0_List[[i]]
+
+s1b0_Combined <- bind_rows(s1b0_List)
+
+```
+
+##s2b1
+```{r}
+s2b1_List<-list()  
+Output_Milk_s2b1<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_s2b1, Interval =1/60,AF = 1)
+Changes_Over_Time_s2b1<-Output_Milk_s2b1[[2]]
+for (i in 1:50){
+  AnalysysDF_s2b1<- Appling_Changes(df = Outs_DFs_2sb1[[i]], Changes_Over_Time = Changes_Over_Time_s2b1)
+  s2b1_List<-append(s2b1_List,list(AnalysysDF_s2b1))
+}
+s2b1_List[[i]]
+
+s2b1_Combined <- bind_rows(s2b1_List)
+
+```
+
+##s3b2
+```{r}
+s3b2_List<-list()  
+Output_Milk_s3b2<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_s3b2, Interval =1/60,AF = 1)
+Changes_Over_Time_s3b2<-Output_Milk_s3b2[[2]]
+for (i in 1:50){
+  AnalysysDF_s3b2<- Appling_Changes(df = Outs_DFs_3sb2[[i]], Changes_Over_Time = Changes_Over_Time_s3b2)
+  s3b2_List<-append(s3b2_List,list(AnalysysDF_s3b2))
+}
+s3b2_List[[i]]
+
+s3b2_Combined <- bind_rows(s3b2_List)
+
+```
+
+
+##s4b3
+```{r}
+s43b_List<-list()  
+Output_Milk_s43b<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_s4b3, Interval =1/60,AF = 1)
+Changes_Over_Time_s43b<-Output_Milk_s43b[[2]]
+for (i in 1:50){
+  AnalysysDF_s43b<- Appling_Changes(df = Outs_DFs_4s3b[[i]], Changes_Over_Time = Changes_Over_Time_s43b)
+  s43b_List<-append(s43b_List,list(AnalysysDF_s43b))
+}
+s43b_List[[i]]
+
+s4b3_Combined <- bind_rows(s43b_List)
+
+```
+
+##s4b3TIC
+```{r}
+s43b_ListTIC<-list()  
+Output_Milk_s43b<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_s4b3TIC, Interval =1/60,AF = 1)
+Changes_Over_Time_s43b<-Output_Milk_s43b[[2]]
+for (i in 1:50){
+  AnalysysDF_s43b<- Appling_Changes(df = Outs_DFs_4s3b[[i]], Changes_Over_Time = Changes_Over_Time_s43b)
+  s43b_ListTIC<-append(s43b_ListTIC,list(AnalysysDF_s43b))
+}
+s43b_List[[i]]
+
+s4b3TIC_Combined <- bind_rows(s43b_ListTIC)
+
+```
+
+##s4b3TIP
+```{r}
+s43bTIP_List<-list()  
+Output_Milk_s43b<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_s4b3TIP, Interval =1/60,AF = 1)
+Changes_Over_Time_s43b<-Output_Milk_s43b[[2]]
+for (i in 1:50){
+  AnalysysDF_s43b<- Appling_Changes(df = Outs_DFs_4s3b[[i]], Changes_Over_Time = Changes_Over_Time_s43b)
+  s43bTIP_List<-append(s43bTIP_List,list(AnalysysDF_s43b))
+}
+
+s43b_List[[i]]
+
+s4b3TIP_Combined <- bind_rows(s43bTIP_List)
+
+```
+
+
+
+##s5b4
+```{r}
+s54b_List<-list()  
+Output_Milk_s54b<-LMO_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_s5b4, Interval =1/60,AF = 1.32)
+Changes_Over_Time_s54b<-Output_Milk_s54b[[2]]
+for (i in 1:50){
+  AnalysysDF_s54b<- Appling_Changes(df = Outs_DFs_5s4b[[i]], Changes_Over_Time = Changes_Over_Time_s54b)
+  s54b_List<-append(s54b_List,list(AnalysysDF_s54b))
+}
+
+s54b_List[[i]]
+
+s5b4_Combined <- bind_rows(s54b_List)
+
+
+```
+
+##s5b4TIC
+```{r}
+s54bTIC_List<-list()  
+Output_Milk_s54b<-LMO_Function_Single_Milk(Cont = 2.44, Pop_Max =8.14, Time_Temp_df = Df_RT_MT_s5b4TIC, Interval =1/60,AF = 1.32)
+Changes_Over_Time_s54b<-Output_Milk_s54b[[2]]
+for (i in 1:50){
+  AnalysysDF_s54b<- Appling_Changes(df = Outs_DFs_5s4b[[i]], Changes_Over_Time = Changes_Over_Time_s54b)
+  s54bTIC_List<-append(s54bTIC_List,list(AnalysysDF_s54b))
+}
+
+s54bTIC_List[[i]]
+
+s5b4TIC_Combined <- bind_rows(s54bTIC_List)
+
+
+```
+
+##s5b4TIP
+```{r}
+s54bTIP_List<-list()  
+Output_Milk_s54b<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_s5b4TIP, Interval =1/60,AF = 1)
+Changes_Over_Time_s54b<-Output_Milk_s54b[[2]]
+for (i in 1:50){
+  AnalysysDF_s54b<- Appling_Changes(df = Outs_DFs_5s4b[[i]], Changes_Over_Time = Changes_Over_Time_s54b)
+  s54bTIP_List<-append(s54bTIP_List,list(AnalysysDF_s54b))
+}
+
+s54bTIP_List[[i]]
+
+s5b4TIP_Combined <- bind_rows(s54bTIP_List)
+
+```
+
+
+
+#No Share table
+##No_ST
+```{r}
+SToff_List<-list()  
+Output_Milk_SToff<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_RTB, Interval =1/60,AF = 1)
+Changes_Over_Time_SToff<-Output_Milk_SToff[[2]]
+
+for (i in 1:50){
+  AnalysysDF_SToff<- Appling_Changes(df = Outs_DFs_SToff[[i]], Changes_Over_Time = Changes_Over_Time_SToff)
+  SToff_List<-append(SToff_List,list(AnalysysDF_SToff))
+}
+
+SToff_List[[i]]
+
+SToff_Combined <- bind_rows(SToff_List)
+```
+
+
+# Output the RDS dataset 
+```{r}
+saveRDS(RTB_Combined, file = "Output Data/RTB.rds")
+saveRDS(RT_Combined, file = "Output Data/RT.rds")
+saveRDS(TIP_Combined, file = "Output Data/TIP.rds")
+saveRDS(TIC_Combined, file = "Output Data/TIC.rds")
+saveRDS(CI_Combined, file = "Output Data/CI.rds")
+saveRDS(RTB_refB_Combined, file = "Output Data/RTB_refB.rds")
+saveRDS(RTB_18C_Combined, file = "Output Data/RTB_18C.rds")
+saveRDS(RTB_21C_Combined, file = "Output Data/RTB_21C.rds")
+saveRDS(RTB_23C_Combined, file = "Output Data/RTB_23C.rds")
+saveRDS(Ref_2C_Combined, file = "Output Data/Ref_2C.rds")
+saveRDS(Ref_4C_Combined, file = "Output Data/Ref_4C.rds")
+saveRDS(Ref_7C_Combined, file = "Output Data/Ref_7C.rds")
+saveRDS(SToff_Combined, file="Output Data/SToff.rds")
+
+saveRDS(s1b0_Combined, file = "Output Data/s1b0.rds")
+saveRDS(s2b1_Combined, file = "Output Data/s2b1.rds")
+saveRDS(s3b2_Combined, file = "Output Data/s3b2.rds")
+saveRDS(s4b3_Combined, file = "Output Data/s4b3.rds")
+saveRDS(s5b4_Combined, file = "Output Data/s5b4.rds")
+
+saveRDS(s4b3TIC_Combined, file = "Output Data/s4b3TIC.rds")
+saveRDS(s4b3TIP_Combined, file = "Output Data/s4b3TIP.rds")
+saveRDS(s5b4TIC_Combined, file = "Output Data/s5b4TIC.rds")
+saveRDS(s5b4TIP_Combined, file = "Output Data/s5b4TIP.rds")
+```
+
+# Load the Analysis dataset
+```{r}
+AnalysysDF_RTB <- readRDS("Input Data/RTB.rds")
+AnalysysDF_RT <- readRDS("Input Data/RT.rds")
+AnalysysDF_TIP <- readRDS("Input Data/TIP.rds")
+AnalysysDF_TIC <- readRDS("Input Data/TIC.rds")
+AnalysysDF_CI <- readRDS("Input Data/CI.rds")
+AnalysysDF_RTB_refB <- readRDS("Input Data/RTB_refB.rds")
+AnalysysDF_RTB_18C <- readRDS("Input Data/RTB_18C.rds")
+AnalysysDF_RTB_21C <- readRDS("Input Data/RTB_21C.rds")
+AnalysysDF_RTB_23C <- readRDS("Input Data/RTB_23C.rds")
+AnalysysDF_Ref_2C <- readRDS("Input Data/Ref_2C.rds")
+AnalysysDF_Ref_4C <- readRDS("Input Data/Ref_4C.rds")
+AnalysysDF_Ref_7C <- readRDS("Input Data/Ref_7C.rds")
+AnalysysDF_SToff <- readRDS("Input Data/SToff.rds")
+
+AnalysysDF_s1b0 <- readRDS("Input Data/s1b0.rds")
+AnalysysDF_s2b1 <- readRDS("Input Data/s2b1.rds")
+AnalysysDF_s3b2 <- readRDS("Input Data/s3b2.rds")
+AnalysysDF_s4b3 <- readRDS("Input Data/s4b3.rds")
+AnalysysDF_s5b4 <- readRDS("Input Data/s5b4.rds")
+
+AnalysysDF_s4b3TIC <- readRDS("Input Data/s4b3TIC.rds")
+AnalysysDF_s4b3TIP <- readRDS("Input Data/s4b3TIP.rds")
+AnalysysDF_s5b4TIC <- readRDS("Input Data/s5b4TIC.rds")
+AnalysysDF_s5b4TIP <- readRDS("Input Data/s5b4TIP.rds")
+```
+
+
+##Start of the Milk Analysis based on main output dataframe for Pinto 2025 study
+# Dose response test for listeria 
+```{r}
+### Create a list for looping the DR analysis for 22 scenarios
+AnalysysDF_list<- c("AnalysysDF_RTB", "AnalysysDF_RT", "AnalysysDF_TIP", "AnalysysDF_TIC", 
+                    "AnalysysDF_CI", "AnalysysDF_RTB_refB", "AnalysysDF_RTB_18C", 
+                    "AnalysysDF_RTB_21C", "AnalysysDF_RTB_23C",
+                    "AnalysysDF_Ref_2C","AnalysysDF_Ref_4C","AnalysysDF_Ref_7C", 
+                    "AnalysysDF_s1b0", "AnalysysDF_s2b1","AnalysysDF_s3b2", 
+                    "AnalysysDF_s4b3","AnalysysDF_s5b4","AnalysysDF_s4b3TIC", 
+                    "AnalysysDF_s4b3TIP","AnalysysDF_s5b4TIC","AnalysysDF_s5b4TIC",
+                    "AnalysysDF_SToff")
+
+
+for (i in 1:22) {
+  Analysys_DR <- get(AnalysysDF_list[i]) %>% 
+  filter(Location == "Consumed") %>% 
+  dplyr::select(ID, Location, LMOCon, Shared)
+  
+  assign(paste0("DR_",AnalysysDF_list[i]), Analysys_DR)
+}
+
+### dose response function: exponential model with r randomly draw from lognormal distribution
+dose_response_listeria <- function(df, r_mean, r_sd, serving_size, scenario) {
+  set.seed(12345)
+  r <- 10^(rnorm(nrow(df), r_mean, r_sd)) 
+  
+  dose <- 10^(df$LMOCon) * serving_size
+  df$p_ill <- 1 - exp(-r * dose)
+  
+  result <- data.frame(scenario = scenario,
+                       mean = mean(df$p_ill, na.rm = TRUE))
+  return(result)
+}
+
+### Run DR for 22 scenario and get Pill mean using for loop 
+DR_AnalysysDF_list <- paste0("DR_", AnalysysDF_list)
+DR_result<- list()
+
+for (i in 1:22) {
+  DR_result[[i]]<-dose_response_listeria(get(DR_AnalysysDF_list[i]), 
+                                         r_mean = -12.582, r_sd = 0.836, 
+                                         serving_size = 236, AnalysysDF_list[i])
+  
+}
+DR_result_conbimed <- do.call(rbind, DR_result)
+
+DR_result_conbimed
+
+### output the excel
+writexl::write_xlsx(DR_result_conbimed, path = "Output Data/DR_Output_for_22_Scenarios.xlsx")
+```
+
+
+#### Exact time for Listeria in milk to reach 1 log increase
+```{r}
+## Function calculate the time for Listeria growth reach 1 log 
+LMO_for_1log_change<-function(Cont, Pop_Max, Time_Temp_df, Interval =1/60, AF, scenario){
+  Lag_Consumed = 0
+  Output_Milk<-Func_Growth_LagCon(In_Lag_Consumed = Lag_Consumed ,Time_Temp_df = Time_Temp_df,Interval = Interval, AF=AF)
+  Lag_Consumed = Output_Milk[[2]]
+  Cont<-Output_Milk[[1]]+Cont
+  if( Cont>Pop_Max){
+     Cont = Pop_Max
+  }
+  Time_1log_change <- ifelse(length(which(Output_Milk[[3]] >= 1)) > 0, which(Output_Milk[[3]] >= 1)[1], NA)
+  Time_1log_change <-Time_1log_change/60/24
+  results <- data.frame(scenario = scenario,
+                       Time = Time_1log_change)
+  return (results)
+}
+
+### Create a list for looping the Listeria time and temperature profile for 22 scenarios
+DF_RT_list<- c("Df_RT_MT_RTB", "Df_RT_MT_RT", "Df_RT_MT_TIP", "Df_RT_MT_TIC", 
+                  "Df_RT_MT_CI", "Df_RT_MT_RTB_refB", "Df_RT_MT_RTB_18C", "Df_RT_MT_RTB_21C", 
+                  "Df_RT_MT_RTB_23C","Df_RT_MT_Ref_2C", "Df_RT_MT_Ref_4C", "Df_RT_MT_Ref_7C",
+                  "Df_RT_MT_s1b0", "Df_RT_MT_s2b1", "Df_RT_MT_s3b2", "Df_RT_MT_s4b3","Df_RT_MT_s5b4", 
+                  "Df_RT_MT_s4b3TIC", "Df_RT_MT_s4b3TIP", "Df_RT_MT_s5b4TIC", "Df_RT_MT_s5b4TIP", "Df_RT_MT_RTB")
+
+Time_1log_result<- list()
+for (i in 1:22) {
+  Time_1log_result[[i]] <- LMO_for_1log_change(Cont = 0, Pop_Max =8.5, Time_Temp_df = get(DF_RT_list[i]), Interval =1/60,AF = 1, DF_RT_list[i])
+  
+}
+Time_1log_result_conbimed <- do.call(rbind, Time_1log_result)
+
+Time_1log_result_conbimed
+
+
+##### output the excel
+writexl::write_xlsx(Time_1log_result_conbimed, path = "Output Data/Time_to_1log_22_Scenarios.xlsx")
+```
+
+
+
+#### Categorical analysis for percentage of consumed milks over 1log change in service days
+```{r}
+library(dplyr)
+# Function for catergorical analysis for consumed milks reach 1 log change for different service time
+Cat_Time_1log = function(df, bell_schedule){
+  df$log_change = df$LMOCon - df$InLMOCon
+  df$log_1_change = ifelse(df$log_change >= 1, df$log_change, 0)
+  df$lunch_sched = ifelse(df$TotTime >= 0 & df$TotTime <= bell_schedule, "Day 1",
+                                ifelse(df$TotTime > bell_schedule & df$TotTime <= bell_schedule+1440, "Day 2",
+                                ifelse(df$TotTime > bell_schedule+1440 & df$TotTime <=bell_schedule+1440*2, "Day 3",
+                                ifelse(df$TotTime >bell_schedule+1440*2 & df$TotTime <=bell_schedule+1440*3, "Day 4","Day 5"))))
+  output = df %>%
+    dplyr::select(lunch_sched, Location, log_1_change, log_change) %>%
+    filter(Location == "Consumed") %>%
+    group_by(lunch_sched) %>%
+    dplyr::summarize(
+      milks_consumed = n(),
+      milks_consumed_1_log = sum(log_1_change >= 1),
+      max_log_change_per_day = round(max(log_change), 2))%>%
+    mutate(prevalence_pct = round((milks_consumed_1_log / milks_consumed) * 100, 4))
+  return(output)
+}
+
+# Run the function to 22 scenarios 
+Cat_Time_1log(AnalysysDF_RTB,125)
+Cat_Time_1log(AnalysysDF_RT,125)
+Cat_Time_1log(AnalysysDF_TIP,125)
+Cat_Time_1log(AnalysysDF_TIC,125)
+Cat_Time_1log(AnalysysDF_CI,125)
+Cat_Time_1log(AnalysysDF_RTB_refB,125)
+Cat_Time_1log(AnalysysDF_RTB_18C,125)
+Cat_Time_1log(AnalysysDF_RTB_21C,125)
+Cat_Time_1log(AnalysysDF_RTB_23C,125)
+Cat_Time_1log(AnalysysDF_Ref_2C,125)
+Cat_Time_1log(AnalysysDF_Ref_4C,125)
+Cat_Time_1log(AnalysysDF_Ref_7C,125)
+
+
+Cat_Time_1log(AnalysysDF_s1b0,40)
+Cat_Time_1log(AnalysysDF_s2b1,74)
+Cat_Time_1log(AnalysysDF_s3b2,125)
+Cat_Time_1log(AnalysysDF_s4b3,221)
+Cat_Time_1log(AnalysysDF_s5b4,266)
+
+Cat_Time_1log(AnalysysDF_s4b3TIC,221)
+Cat_Time_1log(AnalysysDF_s4b3TIP,221)
+Cat_Time_1log(AnalysysDF_s5b4TIC,266)
+Cat_Time_1log(AnalysysDF_s5b4TIP,266)
+
+Cat_Time_1log(AnalysysDF_SToff,125)
+
+```
+
+## Calculate the L. monocytogenes growth in Day 1 + create comparison box plot
+```{r}
+# change during first service - baseline and no ST
+
+delta_d1 = function(df, bell_schedule){
+  output = df %>%
+    mutate(
+      log_change = LMOCon - InLMOCon,
+    ) %>%
+    dplyr::select(Location, log_change, TotTime) %>%
+    filter(TotTime >= 0 & TotTime <= bell_schedule)%>%
+    group_by(Location) %>%
+    dplyr::summarize(
+      median_change = median(log_change),
+      mean_change = mean(log_change),
+      sd_change = sd(log_change),
+      median_time = median(TotTime),
+      mean_time = mean(TotTime),
+      sd_time = sd(TotTime)
+      )
+  return(output)
+}
+
+d1_rtb = delta_d1(AnalysysDF_RTB, 125)
+d1_stoff = delta_d1(AnalysysDF_SToff, 125)
+
+d1_change = rbind(d1_rtb, d1_stoff)
+
+##### output the excel
+writexl::write_xlsx(d1_change, path = "Output Data/Growth_during_d1.xlsx")
+
+# Extract the data for figure  
+output_rtb = AnalysysDF_RTB %>%
+    mutate(
+      log_change = LMOCon - InLMOCon,
+    ) %>%
+    select(Location, log_change, TotTime) %>%
+    filter(TotTime >= 0 & TotTime <= 125)%>%
+    group_by(Location)
+output_rtb$scenario = "Baseline"
+
+output_stoff = AnalysysDF_SToff %>%
+    mutate(
+      log_change = LMOCon - InLMOCon,
+    ) %>%
+    select(Location, log_change, TotTime) %>%
+    filter(TotTime >= 0 & TotTime <= 125)%>%
+    group_by(Location)
+output_stoff$scenario = "Share Table Off"
+
+bound_delta_d1 = rbind(output_rtb, output_stoff)
+bound_delta_d1$scenario <- as.factor(bound_delta_d1$scenario)
+
+custom_box_data <- bound_delta_d1 %>%
+  group_by(scenario, Location) %>%
+  summarise(
+    fifth = quantile(log_change, 0.05),
+    lower = quantile(log_change, 0.25),
+    middle = quantile(log_change, 0.50),
+    upper = quantile(log_change, 0.75),
+    ninfith = quantile(log_change, 0.95),
+    .groups = 'drop'
+  )
+
+### create the box plot for comparison
+ggplot(custom_box_data, aes(x = scenario, fill = scenario)) +
+  geom_boxplot(aes(
+      ymin = fifth,
+      lower = lower,
+      middle = middle,
+      upper = upper,
+      ymax = ninfith),
+      stat = "identity",
+      width = 0.5)+
+  scale_fill_manual(values = c("#D3D3D3", "#666666"))+ 
+  facet_wrap(~Location, drop = TRUE)+
+  labs(
+    x = "",
+    y = expression("Log"["10"]*" Change of "*italic("L. monocytogenes")*
+                     "During First Day of Services (Log"["10"]*" CFU/ml)"),
+    fill = "Scenario")+
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.text.x = element_text(angle = 45, hjust = 1, color = "black", size =14),
+    axis.text.y = element_text(color = "black", size = 14),
+    axis.title.y = element_text(size = 12),
+    strip.background = element_rect(color = "black", fill = "white", size = 1),
+    strip.text = element_text(color = "black", size = 16),
+    axis.line = element_line(color = "black", size = 0.5),
+    legend.position = "none"
+    )
+
+### save the graph 
+ggsave("Figures/boxplot_d1.jpg", 
+       plot = last_plot(),
+       dpi = 600,             
+       width = 10,            
+       height = 8,           
+       units = "in",          
+       device = "jpg")
+```
+

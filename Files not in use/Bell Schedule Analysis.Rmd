@@ -1,0 +1,223 @@
+---
+title: "Untitled"
+author: "Gabriella Pinto"
+date: "2023-04-27"
+output: html_document
+---
+
+```{r}
+library(readr)
+#breaks_base <- read_csv("School Breaks Data/Breaks_quant.csv")
+breaks_base <- read_csv("School Breaks Data/Breaks_quant.csv")
+```
+
+##Wrangle dfs
+
+```{r}
+breaks_base$breaks = as.factor(breaks_base$breaks)
+breaks_base$lunches = as.factor(breaks_base$lunches)
+
+library(tidyverse)
+library(dplyr)
+
+breaks_5 = breaks_base %>%
+  filter(breaks == "5")%>%
+  select(where(~ !any(is.na(.))))
+
+breaks_4 = breaks_base %>%
+  filter(breaks == "4")%>%
+  select(where(~ !any(is.na(.))))
+
+breaks_3 = breaks_base %>%
+  filter(breaks == "3")%>%
+  select(where(~ !any(is.na(.))))
+
+breaks_2 = breaks_base %>%
+  filter(breaks == "2")%>%
+  select(where(~ !any(is.na(.))))
+
+breaks_1 = breaks_base %>%
+  filter(breaks == "1")%>%
+  select(where(~ !any(is.na(.))))
+
+breaks_0 = breaks_base %>%
+  filter(breaks == "0")%>%
+  select(where(~ !any(is.na(.))))
+
+breaks_5
+
+```
+
+
+
+##Reorganize for sum stats
+
+```{r}
+library(tidyr)
+
+clean_1 = breaks_1 %>%
+  gather(type, time, L1:L2)%>%
+  mutate(type = recode(type, L1 = "Lunch", L2 = "Lunch", B1 = "Break"))
+
+median(breaks_1$B1)
+
+
+clean_2 = breaks_2 %>%
+  gather(type, time, L1:L3)%>%
+  mutate(type = recode(type, L1 = "Lunch", L2 = "Lunch", L3 = "Lunch", B1 = "Break", B2 = "Break"))
+
+clean_3 = breaks_3 %>%
+  gather(type, time, L1:L4)%>%
+  mutate(type = recode(type, L1 = "Lunch", L2 = "Lunch", L3 = "Lunch", L4 = "Lunch", B1 = "Break", B2 = "Break", B3 = "Break"))
+
+clean_4 = breaks_4 %>%
+  gather(type, time, L1:L5)%>%
+  mutate(type = recode(type, L1 = "Lunch", L2 = "Lunch", L3 = "Lunch", L4 = "Lunch", L5 = "Lunch", B1 = "Break", B2 = "Break", B3 = "Break", B4 = "Break"))
+
+clean_5 = breaks_5 %>%
+  gather(type, time, L1:L6)%>%
+  mutate(type = recode(type, L1 = "Lunch", L2 = "Lunch", L3 = "Lunch", L4 = "Lunch", L5 = "Lunch", L6 = "Lunch", B1 = "Break", B2 = "Break", B3 = "Break", B4 = "Break", B5 = "Break"))
+
+```
+
+## Histograms
+
+```{r}
+
+
+L1<-breaks_0 %>% 
+  select(`...1`,L1) %>% 
+  rename("Total_time" = "L1") %>% 
+  mutate(type = "1 Lunch, No Breaks")
+
+
+
+L2<-clean_1 %>% 
+  group_by(`...1`) %>% 
+  summarise(Total_time= sum(time))%>% 
+  mutate(type = "2 Lunches, 1 Break")
+
+L3<-clean_2 %>% 
+  group_by(`...1`) %>% 
+  summarise(Total_time= sum(time))%>% 
+  mutate(type = "3 Lunches, 2 Breaks")
+
+L4<-clean_3 %>% 
+  group_by(`...1`) %>% 
+  summarise(Total_time= sum(time))%>% 
+  mutate(type = "4 Lunches, 3 Breaks")
+
+L5<-clean_4 %>% 
+  group_by(`...1`) %>% 
+  summarise(Total_time= sum(time))%>% 
+  mutate(type = "5 Lunches, 4 Breaks")
+
+L6<-clean_5 %>% 
+  group_by(`...1`) %>% 
+  summarise(Total_time= sum(time))%>% 
+  mutate(type = "6 Lunches, 5 Breaks")
+
+All_Lunches<-rbind(L1,L2,L3,L4,L5,L6)
+
+CreateAllFacet <- function(df, col){
+  df$facet <- df[[col]]
+  temp <- df
+  temp$facet <- "All combined"
+  merged <-rbind(temp, df)
+
+  # ensure the facet value is a factor
+  merged[[col]] <- as.factor(merged[[col]])
+
+  return(merged)
+}
+df <- CreateAllFacet(All_Lunches, "type")
+
+ggplot(df, aes(x = Total_time))+
+  geom_histogram(aes(fill = type), color= "black")+
+  facet_wrap(~facet, scales = "free_x")+
+  theme(legend.position = c(0.8, 0.2))+
+  theme_bw()+
+  labs(x= "Total Service Time (min)", y = "Count (Schools)", fill= "No. Lunches, No. Breaks") +
+  theme(legend.position="bottom")
+  
+ggsave("Figures/Figure A- histograms_lunch.jpg", width =8, height = 6, units = "in", dpi = 300)
+
+breaks_2$total_time<- rowSums(breaks_2[,6:10])
+
+breaks_2_tot_time<-breaks_2 %>% 
+  group_by(total_time) %>% 
+  summarise(count = n()) %>% 
+  arrange(total_time)
+
+breaks_2_tot_time %>% 
+  ggplot(aes(x = total_time, y = count))+
+  geom_col()
+
+```
+
+
+
+##Sum stats
+
+```{r}
+sum0 = breaks_0%>%
+  summarise(mean = round(mean(L1),0),median = median(L1), q10p = quantile(L1, 0.10), q90p =quantile(L1,0.90))%>% 
+  mutate(NService = 1) %>% 
+  mutate(type = "Lunch") %>% 
+  select(type, NService, mean, median, q10p, q90p)
+
+sum0
+
+sum1 = clean_1 %>%
+  group_by(type)%>%
+  summarise(mean = round(mean(time),0),median = median(time), q10p = quantile(time, 0.10), q90p =quantile(time, 0.90))%>% 
+  mutate(NService = 2) %>% 
+  select(type, NService, mean, median, q10p, q90p)
+sum1
+
+sum2 = clean_2 %>%
+  group_by(type)%>%
+  summarise(mean = round(mean(time),0),median = median(time), q10p = quantile(time, 0.10), q90p =quantile(time, 0.90))%>% 
+  mutate(NService = 3) %>% 
+  select(type, NService, mean, median, q10p, q90p)
+sum2
+
+sum3 = clean_3 %>%
+  group_by(type)%>%
+  summarise(mean = round(mean(time),0),median = median(time), q10p = quantile(time, 0.10), q90p =quantile(time, 0.90))%>% 
+  mutate(NService = 4) %>% 
+  select(type, NService, mean, median, q10p, q90p)
+sum3
+
+
+sum4 = clean_4 %>%
+  group_by(type)%>%
+  summarise(mean = round(mean(time),0),median = median(time), q10p = quantile(time, 0.10), q90p =quantile(time, 0.90))%>% 
+  mutate(NService = 5) %>% 
+  select(type, NService, mean, median, q10p, q90p)
+sum4
+
+sum5 = clean_5 %>%
+  group_by(type)%>%
+  summarise(mean = round(mean(time),0), median = median(time), q10p = quantile(time, 0.10), q90p =quantile(time, 0.90)) %>% 
+  mutate(NService = 6) %>% 
+  select(type, NService, mean, median, q10p, q90p)
+sum5
+
+sum_all = rbind(sum0, sum1, sum2, sum3, sum4, sum5)
+sum_all
+```
+#format summary table
+```{r}
+library(knitr)
+library(kableExtra)
+install.packages("magick")
+webshot::install_phantomjs()
+library(magick)
+library(webshot)
+sum_all %>% 
+  kbl() %>% 
+  kable_classic_2()
+
+```
+

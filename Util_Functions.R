@@ -76,7 +76,20 @@ Func_Spoilage_YN<-function(DF){
   }
   return(DF)
 }
-  
+
+
+
+#Function for Listeria
+
+Func_Listeria_YN<-function(DF){
+  for (i in 1:nrow(DF)){
+    N<-as.numeric(DF[i,colnames(DF)== "LMOCon"])
+    if (N>Listeria_Safety_Treshold){
+      DF[i,colnames(DF)== "ListeriaYN"]<-TRUE
+    }
+  }
+  return(DF)
+}
 
 #Allergen Function: 
 

@@ -27,7 +27,7 @@ Func_ICont_Student<-function(IC_salmonella,mass_feces_hands,HU_NV_in_Feces,Pr_Wa
 # Initial Contamination Functions --------------------------------------------
 
 
-#Function that adds contminations to Data frames and converts from CFU/cm^2 to CFU/Apple or item
+#Function that adds contamination to Data frames and converts from CFU/cm^2 to CFU/Apple or item
 
 
 func_Cont_cm2<-function(DF, Prevalence, logContamination, Fr_Mean_area ){
@@ -186,47 +186,48 @@ Func_Growth_Sto_Norovirus<-function(Condition,DF,TimeVar){
 #No variability
 
 #this is for applying it to the whole dataframe
-Func_Growth_Milk_Spoilage<-function(Temp,DF,TimeVar, GrowthVar){
-  b<-0.03578
-  Tmin<-(-1.19)
-  Tmax<-(41.2)
-  c<-.1719
-  k<-(((Temp-Tmin)*b)^2)+GrowthVar
-  k_ad = k*log10(2)
-  for (i in 1:nrow(DF)){
-    Growth<-TimeVar/24*k_ad
-    N<-DF[i,colnames(DF)== "SpoilageCon"]
-    Con_Final<-N + Growth
-    DF[i,colnames(DF)== "SpoilageCon"]<-as.numeric(Con_Final)
-  }
-  return(DF)
-} 
+#Func_Growth_Milk_Spoilage<-function(Temp,DF,TimeVar, GrowthVar){
+#  b<-0.03578
+#  Tmin<-(-1.19)
+#  Tmax<-(41.2)
+# c<-.1719
+#  k<-(((Temp-Tmin)*b)^2)+GrowthVar
+#  k_ad = k*log10(2)
+#  for (i in 1:nrow(DF)){
+#    Growth<-TimeVar/24*k_ad
+#   N<-DF[i,colnames(DF)== "LMOCon"]
+#    Con_Final<-N + Growth
+#    DF[i,colnames(DF)== "LMOCon"]<-as.numeric(Con_Final)
+#  }
+#  return(DF)
+#} 
 
 
 
 #Function for adding time and Adding Growth
 
-Func_Time_Temp<-function(DF, Item_Picked, Temp, Time){
-  #Parameters for milk spoilage
-  b<-.03772
-  Tmin<-(-6.1)
-  Tmax<-(41.2)
-  c<-.1719
-  k<-(b*(Temp-Tmin)*(1-exp(c*(Temp-Tmax))))^2
-  k_ad = k*log10(2)
-  #How much growth
-  Growth<-Time*k_ad
-  #N current contamination
-  N<-DF[Item_Picked,colnames(DF)== "SpoilageCon"]
-  Con_Final<-N + Growth #Growth in log. 
-  #Refreshing the contamination in the RoW
-  DF[Item_Picked,colnames(DF)== "SpoilageCon"]<-as.numeric(Con_Final)
-  #Adding time to the Data frame
-  Current_Time = DF[Item_Picked,colnames(DF)== "TotTime"]
-  DF[Item_Picked,colnames(DF)== "TotTime"]<-Current_Time+Time
-  DF[Item_Picked,colnames(DF)== "PickTS"]<-TRUE
-  return(DF)
-}
+#Func_Time_Temp<-function(DF, Item_Picked, Temp, Time){
+#  #Parameters for milk spoilage
+#  b<-.03772
+#  Tmin<-(-6.1)
+#  Tmax<-(41.2)
+#  c<-.1719
+#  k<-(b*(Temp-Tmin)*(1-exp(c*(Temp-Tmax))))^2
+#  k_ad = k*log10(2)
+#  #How much growth
+#  Growth<-Time*k_ad
+#  #N current contamination
+#  N<-DF[Item_Picked,colnames(DF)== "LMOCon"]
+#  Con_Final<-N + Growth #Growth in log. 
+#  #Refreshing the contamination in the RoW
+#  DF[Item_Picked,colnames(DF)== "LMOCon"]<-as.numeric(Con_Final)
+
+#Adding time to the Data frame
+#  Current_Time = DF[Item_Picked,colnames(DF)== "TotTime"]
+#  DF[Item_Picked,colnames(DF)== "TotTime"]<-Current_Time+Time
+#  DF[Item_Picked,colnames(DF)== "PickTS"]<-TRUE
+#  return(DF)
+#}
 
 #Adding time to consumed milk milks. 
 Func_Adding_Time_ConItem<-function(DF, Item_Picked, Time){

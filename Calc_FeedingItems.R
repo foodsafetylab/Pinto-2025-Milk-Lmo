@@ -59,7 +59,7 @@ if(Sim_PRE==1){
     Extra_Items_Pre<-Fuct_DF_Feeding(FoodType = "Pre")
     
     
-    if(salmonella==1 && Calculated_Cont_Pss==1){
+    if(salmonella==1 && Calculated_Cont_Pre==1){
       Extra_Items_Pre<-func_Cont_cm2(Extra_Items_Pre,Prevalence_Salmonella_Pre,Pre_Contamination_salmonella,Pre_Mean_area)
     } else if (norovirus == 1 && Calculated_Cont_Pre ==1){
       Extra_Items_Pre<-func_Cont_cm2(Extra_Items_Pre,Prevalence_Norovirus_Pre,Pre_Contamination_norovirus,Pre_Mean_area)

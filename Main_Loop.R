@@ -191,7 +191,7 @@ Main_Loop<-function(){
         Pre_Data.Frame<-OutputFCC$Data.Frame
         Cont_Student<-OutputFCC$Cont_Student
         # #Milk Spoilage Sub model
-        # if (Milk_Spoilage_YN==TRUE){
+        # if (Milk_Listeria_YN==TRUE){
         #   Pre_Data.Frame<-Func_Time_Temp(DF =Pre_Data.Frame , 
         #                                  Item_Picked =Pre_Picked , 
         #                                  Temp = Temp_SL,
@@ -267,7 +267,7 @@ Main_Loop<-function(){
         Pre_Data.Frame<-OutputFEPre$DF
         
         #Milk Spoilage Sub model for time during regardless of if item got consumer or not
-        # if (Milk_Spoilage_YN==TRUE){
+        # if (Milk_Listeria_YN==TRUE){
         #           Pre_Data.Frame<-Func_Time_Temp(DF =Pre_Data.Frame , 
         #                                Item_Picked =Pre_Picked , 
         #                                Temp = Temp_SD,
@@ -494,7 +494,7 @@ Main_Loop<-function(){
             Pre_Data.Frame<-OutputFCC_ST$Data.Frame
             Cont_Student<-OutputFCC_ST$Cont_Student
             #Milk Spoilage Sub model
-            # if (Milk_Spoilage_YN==TRUE){
+            # if (Milk_Listeria_YN==TRUE){
             #   Pre_Data.Frame<-Func_Time_Temp(DF =Pre_Data.Frame , 
             #                                  Item_Picked =Pre_ST_Picked , 
             #                                  Temp = Temp_ST,
