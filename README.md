@@ -9,7 +9,7 @@
 
 ## Usage
 ### User Guide 
-You can find the full user guide document in the [Share Table Model User Guide](/Share_Table_Model_User_Guide) file. The document contains information on input and output datasets, brief descriptions of files needed for a user to run this model, and detailed information and how-to-use for main analysis. 
+You can find the full user guide document in the [Share Table Model User Guide](/Share_Table_Model_User_Guide.dox) file. The document contains information on input and output datasets, brief descriptions of files needed for a user to run this model, and detailed information and how-to-use for main analysis. 
 
 ### Setup
 #### Input datasets 
@@ -18,7 +18,7 @@ You can find the full user guide document in the [Share Table Model User Guide](
 - **Datasets generated for this manuscript** - In the “Input Data” folder, there are 22 RDS files that contains the saved data files generated for this manuscript from running this model. These files contain the information used to calculate the (i) time to 1-Log10 L. monocytogenes growth, (ii) L. monocytogenes growth, and (iii) listeriosis risk from milk consumption under school share table scenarios. You can reproduce the same results if you input these RDS files. If you rerun the model and generate new main datasets for analysis, you would obtain similar results, but these would vary slightly from what is presented in the manuscript. Thus, these RDS files are saved to this GitHub.
 
 ### Running
-The following are the files needed to run this model. Most of the files do not need to be modified to run the model. For those that need to be changed, the how-to-use and detailed information are described in the [Share Table Model User Guide](/Share_Table_Model_User_Guide) file.
+The following are the files needed to run this model. Most of the files do not need to be modified to run the model. For those that need to be changed, the how-to-use and detailed information are described in the [Share Table Model User Guide](/Share_Table_Model_User_Guide.dox) file.
 
 - **Analysis Pinto et al 2025.Rmd** - The main analysis file. This file runs the model and generates the results: (i) time to 1-Log10 *L. monocytogenes* growth, (ii) *L. monocytogenes* growth, and (iii) listeriosis risk from milk consumption under school share table scenarios.
 - **Calc_FeedingItems.R** - Restock the service line if items ran out for a given day.
