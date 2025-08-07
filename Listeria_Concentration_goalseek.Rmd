@@ -1,0 +1,37 @@
+---
+title: "Listeria Concentration Estimation"
+author: "Yiyi Li"
+date: "2025-04-22"
+output: html_document
+---
+
+```{r}
+#to get to confidence interval about the true prevalence
+#observed rate was ~0.06%, but what is the uncertainty about that?
+
+# Perform exact binomial test with 90% confidence
+result = binom.test(x = 1, n = 1846, conf.level = 0.90)
+
+# Print the confidence interval
+result$conf.int
+
+```
+
+```{r}
+p_target<- 1/1846
+target <- 1-1/1846
+x <- 1/25
+sd <- 0.8
+
+goal_seek_mean <- function(mean_guess) {
+  pnorm(log10(x), mean = mean_guess, sd = sd) - target
+}
+
+# Use uniroot to find the mean that makes the function = 0
+result <- uniroot(goal_seek_mean, interval = c(-5, -1))  # adjust interval if needed
+result$root
+
+pnorm(log10(x), mean=result$root, sd=0.8,lower.tail = FALSE)
+
+
+```

@@ -179,6 +179,9 @@ Df_RT_MT_s4b3TIP<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s4b3TIP.csv
 Df_RT_MT_s5b4TIC<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s5b4TIC.csv")
 #very long + Tray with Ice Packs
 Df_RT_MT_s5b4TIP<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_s5b4TIP.csv")
+
+#high contamination level
+Df_RT_MT_highcon<-read.csv("Pedicted Time and Temp Profiles/Df_RT_MT_RTB.csv")
 ```
 
 
@@ -297,6 +300,10 @@ Outs_DFs_5sb4TIC<-Outs_DFs_5s4b
 
 source("Input_Static_s5b4.R")
 Outs_DFs_5sb4TIP<-Outs_DFs_5s4b
+
+# High contamination 
+source("Input_Static_highcon.R")
+Outs_DFs_highcon<-Obtaining_LMO_Milks_DFs(N_Years = 50, Service_Length = 50,TurningT_Length = 25) 
 ```
 
 
@@ -318,6 +325,25 @@ RTB_List[[i]]
 RTB_Combined <- bind_rows(RTB_List)
 
 ```
+
+
+##High contamination
+```{r}
+RTB_highcon_List<-list()  
+Output_Milk_RTB_highcon<-LMO_Function_Single_Milk(Cont = 0, Pop_Max =8.5, Time_Temp_df = Df_RT_MT_highcon, Interval =1/60,AF = 1)
+Changes_Over_Time_RTB_highcon<-Output_Milk_RTB_highcon[[2]]
+
+for (i in 1:50){
+  AnalysysDF_RTB_highcon<- Appling_Changes(df = Outs_DFs_highcon[[i]], Changes_Over_Time = Changes_Over_Time_RTB_highcon)
+  RTB_highcon_List<-append(RTB_highcon_List,list(AnalysysDF_RTB_highcon))
+}
+
+RTB_highcon_List[[i]]
+
+RTB_highcon_Combined <- bind_rows(RTB_highcon_List)
+
+```
+
 
 ##RTR
 ```{r}
@@ -702,6 +728,8 @@ saveRDS(s4b3TIC_Combined, file = "Output Data/s4b3TIC.rds")
 saveRDS(s4b3TIP_Combined, file = "Output Data/s4b3TIP.rds")
 saveRDS(s5b4TIC_Combined, file = "Output Data/s5b4TIC.rds")
 saveRDS(s5b4TIP_Combined, file = "Output Data/s5b4TIP.rds")
+
+saveRDS(RTB_highcon_Combined, file = "Output Data/RTB_highcon.rds")
 ```
 
 # Load the Analysis dataset
@@ -730,6 +758,8 @@ AnalysysDF_s4b3TIC <- readRDS("Input Data/s4b3TIC.rds")
 AnalysysDF_s4b3TIP <- readRDS("Input Data/s4b3TIP.rds")
 AnalysysDF_s5b4TIC <- readRDS("Input Data/s5b4TIC.rds")
 AnalysysDF_s5b4TIP <- readRDS("Input Data/s5b4TIP.rds")
+
+AnalysysDF_RTB_highcon <- readRDS("Input Data/RTB_highcon.rds")
 ```
 
 
@@ -743,11 +773,11 @@ AnalysysDF_list<- c("AnalysysDF_RTB", "AnalysysDF_RT", "AnalysysDF_TIP", "Analys
                     "AnalysysDF_Ref_2C","AnalysysDF_Ref_4C","AnalysysDF_Ref_7C", 
                     "AnalysysDF_s1b0", "AnalysysDF_s2b1","AnalysysDF_s3b2", 
                     "AnalysysDF_s4b3","AnalysysDF_s5b4","AnalysysDF_s4b3TIC", 
-                    "AnalysysDF_s4b3TIP","AnalysysDF_s5b4TIC","AnalysysDF_s5b4TIC",
-                    "AnalysysDF_SToff")
+                    "AnalysysDF_s4b3TIP","AnalysysDF_s5b4TIC","AnalysysDF_s5b4TIP",
+                    "AnalysysDF_SToff", "AnalysysDF_RTB_highcon")
 
 
-for (i in 1:22) {
+for (i in 1:23) {
   Analysys_DR <- get(AnalysysDF_list[i]) %>% 
   filter(Location == "Consumed") %>% 
   dplyr::select(ID, Location, LMOCon, Shared)
@@ -764,28 +794,59 @@ dose_response_listeria <- function(df, r_mean, r_sd, serving_size, scenario) {
   df$p_ill <- 1 - exp(-r * dose)
   
   result <- data.frame(scenario = scenario,
-                       mean = mean(df$p_ill, na.rm = TRUE))
+                       mean_pill = mean(df$p_ill, na.rm = TRUE))
   return(result)
 }
 
-### Run DR for 22 scenario and get Pill mean using for loop 
+### Run DR for 23 scenario and get Pill mean using for loop 
 DR_AnalysysDF_list <- paste0("DR_", AnalysysDF_list)
 DR_result<- list()
 
-for (i in 1:22) {
+for (i in 1:23) {
   DR_result[[i]]<-dose_response_listeria(get(DR_AnalysysDF_list[i]), 
                                          r_mean = -12.582, r_sd = 0.836, 
                                          serving_size = 236, AnalysysDF_list[i])
   
 }
 DR_result_conbimed <- do.call(rbind, DR_result)
+DR_result_conbimed
+DR_result_conbimed$n_trials <- c(
+  714578, 714578, 714578, 714578, 714578, 714578,
+  714578, 714578, 714578, 714578, 714578, 714578,
+  623994, 355019, 714443, 1074910, 1434626, 1794887,
+  1434626, 1434626, 1794887, 1794887, 714716)
+DR_result_conbimed$ill_1_school <- DR_result_conbimed$mean_pill * DR_result_conbimed$n_trials/50
 
+DR_result_conbimed$pr_yr_all <- DR_result_conbimed$ill_1_school*98577
+DR_result_conbimed$ year_mean <- 1/DR_result_conbimed$pr_yr_all
 DR_result_conbimed
 
 ### output the excel
-writexl::write_xlsx(DR_result_conbimed, path = "Output Data/DR_Output_for_22_Scenarios.xlsx")
+writexl::write_xlsx(DR_result_conbimed, path = "Output Data/DR_Output_for_23_Scenarios.xlsx")
+
 ```
 
+```{r}
+#Apply to all scenarios to calculate the uncertainty of the t_case
+
+#Calculate percentiles from binomial distribution and convert to years until 1 illness observed
+year_limits = DR_result_conbimed %>%
+  group_by(scenario)%>%
+  summarise(
+    lower_ci = qpois(p = 0.05, lambda = (pr_yr_all*n_trials), lower.tail = FALSE),
+    median = qpois(p = 0.50, lambda = (pr_yr_all*n_trials), lower.tail = FALSE),
+    mean_years = round(1/(pr_yr_all),0),
+    upper_ci = qpois(p = 0.95, lambda = (pr_yr_all*n_trials), lower.tail = FALSE),
+    lower_years = round(1/(lower_ci/n_trials),0),
+    median_years = round(1/(median/n_trials),0),
+    upper_years = round(1/(upper_ci/n_trials),0)
+  )%>%
+  ungroup()%>%
+  select(scenario, lower_years, median_years, mean_years, upper_years)
+
+### output the excel
+writexl::write_xlsx(year_limits, path = "Output Data/DR_Output_for_23_Scenarios_t_case.xlsx")
+```
 
 #### Exact time for Listeria in milk to reach 1 log increase
 ```{r}
@@ -810,10 +871,10 @@ DF_RT_list<- c("Df_RT_MT_RTB", "Df_RT_MT_RT", "Df_RT_MT_TIP", "Df_RT_MT_TIC",
                   "Df_RT_MT_CI", "Df_RT_MT_RTB_refB", "Df_RT_MT_RTB_18C", "Df_RT_MT_RTB_21C", 
                   "Df_RT_MT_RTB_23C","Df_RT_MT_Ref_2C", "Df_RT_MT_Ref_4C", "Df_RT_MT_Ref_7C",
                   "Df_RT_MT_s1b0", "Df_RT_MT_s2b1", "Df_RT_MT_s3b2", "Df_RT_MT_s4b3","Df_RT_MT_s5b4", 
-                  "Df_RT_MT_s4b3TIC", "Df_RT_MT_s4b3TIP", "Df_RT_MT_s5b4TIC", "Df_RT_MT_s5b4TIP", "Df_RT_MT_RTB")
+                  "Df_RT_MT_s4b3TIC", "Df_RT_MT_s4b3TIP", "Df_RT_MT_s5b4TIC", "Df_RT_MT_s5b4TIP", "Df_RT_MT_RTB", "Df_RT_MT_RTB")
 
 Time_1log_result<- list()
-for (i in 1:22) {
+for (i in 1:23) {
   Time_1log_result[[i]] <- LMO_for_1log_change(Cont = 0, Pop_Max =8.5, Time_Temp_df = get(DF_RT_list[i]), Interval =1/60,AF = 1, DF_RT_list[i])
   
 }
@@ -823,7 +884,7 @@ Time_1log_result_conbimed
 
 
 ##### output the excel
-writexl::write_xlsx(Time_1log_result_conbimed, path = "Output Data/Time_to_1log_22_Scenarios.xlsx")
+writexl::write_xlsx(Time_1log_result_conbimed, path = "Output Data/Time_to_1log_23_Scenarios.xlsx")
 ```
 
 
@@ -851,7 +912,7 @@ Cat_Time_1log = function(df, bell_schedule){
   return(output)
 }
 
-# Run the function to 22 scenarios 
+# Run the function to 23 scenarios 
 Cat_Time_1log(AnalysysDF_RTB,125)
 Cat_Time_1log(AnalysysDF_RT,125)
 Cat_Time_1log(AnalysysDF_TIP,125)
@@ -879,7 +940,74 @@ Cat_Time_1log(AnalysysDF_s5b4TIP,266)
 
 Cat_Time_1log(AnalysysDF_SToff,125)
 
+Cat_Time_1log(AnalysysDF_RTB_highcon,125)
 ```
+
+## Listeria concentration at consumption 
+```{r}
+library(dplyr)
+
+#function for obtaining summary stats
+
+summary_stats_lm = function(df){
+  summary_stats = df %>%
+    filter(Location == "Consumed")%>%
+    ungroup()%>%
+    dplyr::summarize(
+      min_lm = round(min(LMOCon, na.rm = TRUE),2),
+      mean_lm = round(mean(LMOCon, na.rm = TRUE),2),
+      median_lm = round(median(LMOCon, na.rm = TRUE),2),
+      maximum_lm = round(max(LMOCon, na.rm = TRUE),2),
+      fifthpct_lm = round(quantile(LMOCon, 0.05, na.rm = TRUE),2),
+      nfpct_lm = round(quantile(LMOCon, 0.95, na.rm = TRUE),2)
+    )
+}
+
+#combining into list so I can use lapply
+df_list = list(AnalysysDF_RTB = AnalysysDF_RTB, 
+  AnalysysDF_SToff = AnalysysDF_SToff, 
+  AnalysysDF_RT = AnalysysDF_RT, 
+  AnalysysDF_TIP = AnalysysDF_TIP, 
+  AnalysysDF_TIC = AnalysysDF_TIC, 
+  AnalysysDF_CI = AnalysysDF_CI, 
+  AnalysysDF_RTB_refB = AnalysysDF_RTB_refB, 
+  AnalysysDF_Ref_2C = AnalysysDF_Ref_2C, 
+  AnalysysDF_Ref_4C = AnalysysDF_Ref_4C, 
+  AnalysysDF_Ref_7C = AnalysysDF_Ref_7C, 
+  AnalysysDF_RTB_18C = AnalysysDF_RTB_18C, 
+  AnalysysDF_RTB_21C = AnalysysDF_RTB_21C, 
+  AnalysysDF_RTB_23C = AnalysysDF_RTB_23C, 
+  AnalysysDF_s1b0 = AnalysysDF_s1b0, 
+  AnalysysDF_s2b1 = AnalysysDF_s2b1, 
+  AnalysysDF_s3b2 = AnalysysDF_s3b2, 
+  AnalysysDF_s4b3 = AnalysysDF_s4b3, 
+  AnalysysDF_s5b4 = AnalysysDF_s5b4, 
+  AnalysysDF_s4b3TIC = AnalysysDF_s4b3TIC, 
+  AnalysysDF_s4b3TIP = AnalysysDF_s4b3TIP, 
+  AnalysysDF_s5b4TIC = AnalysysDF_s5b4TIC, 
+  AnalysysDF_s5b4TIP = AnalysysDF_s5b4TIP, 
+  AnalysysDF_RTB_highcon = AnalysysDF_RTB_highcon
+  )
+
+library(purrr)
+df_list_with_names <- lapply(names(df_list), function(df_name) {
+  df <- df_list[[df_name]]
+  df$data_frame_name <- df_name
+  return(df)
+})
+
+final_summary_stats <- bind_rows(lapply(df_list_with_names, function(df) {
+  summary_stats <- summary_stats_lm(df)  # Apply summary stats
+  summary_stats$data_frame_name <- df$data_frame_name[1]  # Add the data frame name
+  return(summary_stats)
+}))
+
+final_summary_stats
+
+library(writexl)
+write_xlsx(final_summary_stats, "Output Data/final_summary_stats.xlsx")
+```
+
 
 ## Calculate the L. monocytogenes growth in Day 1 + create comparison box plot
 ```{r}
