@@ -766,6 +766,7 @@ AnalysysDF_RTB_highcon <- readRDS("Input Data/RTB_highcon.rds")
 ##Start of the Milk Analysis based on main output dataframe for Pinto 2025 study
 # Dose response test for listeria 
 ```{r}
+library(dplyr)
 ### Create a list for looping the DR analysis for 22 scenarios
 AnalysysDF_list<- c("AnalysysDF_RTB", "AnalysysDF_RT", "AnalysysDF_TIP", "AnalysysDF_TIC", 
                     "AnalysysDF_CI", "AnalysysDF_RTB_refB", "AnalysysDF_RTB_18C", 
@@ -1005,7 +1006,7 @@ final_summary_stats <- bind_rows(lapply(df_list_with_names, function(df) {
 final_summary_stats
 
 library(writexl)
-write_xlsx(final_summary_stats, "Output Data/final_summary_stats.xlsx")
+write_xlsx(final_summary_stats, "Output Data/final_LMOCon_stats.xlsx")
 ```
 
 
@@ -1048,6 +1049,7 @@ output_rtb = AnalysysDF_RTB %>%
     select(Location, log_change, TotTime) %>%
     filter(TotTime >= 0 & TotTime <= 125)%>%
     group_by(Location)
+
 output_rtb$scenario = "Baseline"
 
 output_stoff = AnalysysDF_SToff %>%
@@ -1097,9 +1099,9 @@ ggplot(custom_box_data, aes(x = scenario, fill = scenario)) +
     axis.text.x = element_text(angle = 45, hjust = 1, color = "black", size =14),
     axis.text.y = element_text(color = "black", size = 14),
     axis.title.y = element_text(size = 12),
-    strip.background = element_rect(color = "black", fill = "white", size = 1),
+    strip.background = element_rect(color = "black", fill = "white", linewidth = 1),
     strip.text = element_text(color = "black", size = 16),
-    axis.line = element_line(color = "black", size = 0.5),
+    axis.line = element_line(color = "black", linewidth = 0.5),
     legend.position = "none"
     )
 
