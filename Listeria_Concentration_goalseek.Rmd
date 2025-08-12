@@ -18,8 +18,30 @@ result$conf.int
 ```
 
 ```{r}
+#Baseline initial contamination
 p_target<- 1/1846
 target <- 1-1/1846
+x <- 1/25
+sd <- 0.8
+
+goal_seek_mean <- function(mean_guess) {
+  pnorm(log10(x), mean = mean_guess, sd = sd) - target
+}
+
+
+# Use uniroot to find the mean that makes the function = 0
+result <- uniroot(goal_seek_mean, interval = c(-5, -1))  # adjust interval if needed
+result$root
+
+pnorm(log10(x), mean=result$root, sd=0.8,lower.tail = FALSE)
+
+
+```
+
+```{r}
+#Worst case initial contamination
+p_target<- 0.003
+target <- 1-0.003
 x <- 1/25
 sd <- 0.8
 
@@ -32,6 +54,5 @@ result <- uniroot(goal_seek_mean, interval = c(-5, -1))  # adjust interval if ne
 result$root
 
 pnorm(log10(x), mean=result$root, sd=0.8,lower.tail = FALSE)
-
-
 ```
+
