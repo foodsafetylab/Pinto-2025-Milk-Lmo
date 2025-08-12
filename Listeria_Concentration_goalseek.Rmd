@@ -1,7 +1,5 @@
 ---
 title: "Listeria Concentration Estimation"
-author: "Yiyi Li"
-date: "2025-04-22"
 output: html_document
 ---
 
